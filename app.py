@@ -2,6 +2,8 @@
 import streamlit as st
 import pandas as pd
 
+from pathlib import Path
+
 from modules.asr import transcribe_audio
 from modules.llm_extractor import extract_symptoms
 from modules.triage_engine import assess
@@ -11,7 +13,7 @@ from modules.database import (
     init_db,
     save_assessment,
     list_assessments,
-    export_csv
+    export_csv,
 )
 
 
@@ -22,9 +24,10 @@ from modules.database import (
 st.set_page_config(
     page_title="মাতৃকণ্ঠ | Matrikontho",
     page_icon="🌸",
-    layout="centered"
+    layout="centered",
 )
 
+# Initialize database
 init_db()
 
 
@@ -32,15 +35,22 @@ init_db()
 # 2. LOAD CUSTOM CSS
 # =========================================================
 
-from pathlib import Path
-
 css_path = Path(__file__).parent / "style.css"
 
-with open(css_path, encoding="utf-8") as f:
+try:
+    css_content = css_path.read_text(encoding="utf-8")
+
     st.markdown(
-        f"<style>{f.read()}</style>",
-        unsafe_allow_html=True
+        f"<style>{css_content}</style>",
+        unsafe_allow_html=True,
     )
+
+except FileNotFoundError:
+    st.warning(
+        "style.css পাওয়া যায়নি। "
+        "প্রজেক্ট ফোল্ডারে style.css ফাইলটি রাখুন।"
+    )
+
 
 # =========================================================
 # 3. SESSION STATE
@@ -51,7 +61,8 @@ defaults = {
     "transcript_box": "",
     "extraction": None,
     "result": None,
-    "history": []
+    "assessment_saved": False,
+    "saved_assessment_id": None,
 }
 
 for key, value in defaults.items():
@@ -63,22 +74,27 @@ for key, value in defaults.items():
 # 4. HEADER
 # =========================================================
 
-st.markdown("""
-<div class="hero">
-    <div class="hero-title">
-        🌸 মাতৃকণ্ঠ
-    </div>
+st.markdown(
+    """
+    <div class="hero">
 
-    <div class="big">
-        আপনার কথা শুনি, ঝুঁকি বুঝি, সাহায্যের পথ দেখাই
-    </div>
+        <div class="hero-brand">
+            <span class="hero-flower">🌸</span>
+            <span class="hero-title">মাতৃকণ্ঠ</span>
+        </div>
 
-    <div class="hero-subtitle">
-        Bangla Voice-based Maternal Risk Screener · Hackathon MVP
-    </div>
-</div>
-""", unsafe_allow_html=True)
+        <div class="hero-tagline">
+            আপনার কথা শুনি, ঝুঁকি বুঝি, সাহায্যের পথ দেখাই
+        </div>
 
+        <div class="hero-subtitle">
+            Bangla Voice-based Maternal Risk Screener · Hackathon MVP
+        </div>
+
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.warning(
     "এটি পরীক্ষামূলক স্ক্রিনিং সহায়ক—রোগ নির্ণয় "
@@ -91,11 +107,13 @@ st.warning(
 # 5. TABS
 # =========================================================
 
-tab1, tab2, tab3 = st.tabs([
-    "🎙️ নতুন মূল্যায়ন",
-    "📋 স্বাস্থ্যকর্মী ড্যাশবোর্ড",
-    "ℹ️ সীমাবদ্ধতা"
-])
+tab1, tab2, tab3 = st.tabs(
+    [
+        "🎙️ নতুন মূল্যায়ন",
+        "📋 স্বাস্থ্যকর্মী ড্যাশবোর্ড",
+        "ℹ️ সীমাবদ্ধতা",
+    ]
+)
 
 
 # =========================================================
@@ -111,75 +129,106 @@ with tab1:
         "আপনার শরীরের কোনো সমস্যা হচ্ছে? আমাকে বলুন।"
     )
 
+    # -----------------------------------------------------
+    # PREGNANCY INFORMATION
+    # -----------------------------------------------------
+
     pregnancy = st.selectbox(
         "আপনি কি বর্তমানে গর্ভবতী?",
-        ["জানি না", "হ্যাঁ", "না"]
+        ["জানি না", "হ্যাঁ", "না"],
+        key="pregnancy_status",
     )
 
     weeks = st.number_input(
         "গর্ভাবস্থার কত সপ্তাহ চলছে? জানা না থাকলে ০ দিন",
         min_value=0,
         max_value=45,
-        value=0
+        value=0,
+        step=1,
+        key="gestational_weeks",
     )
+
+    pregnancy_status = {
+        "হ্যাঁ": "pregnant",
+        "না": "not_pregnant",
+        "জানি না": "unknown",
+    }[pregnancy]
 
     # -----------------------------------------------------
     # AUDIO INPUT
     # -----------------------------------------------------
 
+    st.markdown("#### 🎙️ অডিও ইনপুট")
+
     audio = st.audio_input(
-        "মাইক্রোফোনে কথা বলুন (সমর্থিত ব্রাউজারে)"
+        "মাইক্রোফোনে কথা বলুন",
+        key="recorded_audio",
     )
 
     uploaded = st.file_uploader(
-        "অথবা অডিও ফাইল দিন",
-        type=["wav", "mp3", "m4a", "ogg"]
+        "অথবা অডিও ফাইল আপলোড করুন",
+        type=["wav", "mp3", "m4a", "ogg"],
+        key="uploaded_audio",
     )
 
-    if audio or uploaded:
+    selected_audio = audio if audio is not None else uploaded
 
-        if st.button("অডিও থেকে লেখা তৈরি করুন"):
+    if selected_audio is not None:
+
+        if st.button(
+            "অডিও থেকে লেখা তৈরি করুন",
+            width="stretch",
+        ):
 
             with st.spinner("বাংলা কথা শনাক্ত করা হচ্ছে..."):
 
-                transcript, err = transcribe_audio(
-                    audio or uploaded
-                )
+                transcription = transcribe_audio(selected_audio)
 
-                if err:
+            if transcription.get("success"):
 
-                    st.error(err)
+                recognized_text = transcription.get("text", "").strip()
 
-                elif transcript and transcript.strip():
+                if recognized_text:
 
-                    # Update widget state before text_area renders.
-                    st.session_state["transcript_box"] = transcript.strip()
-                    st.session_state["transcript"] = transcript.strip()
+                    st.session_state["transcript_box"] = recognized_text
+                    st.session_state["transcript"] = recognized_text
 
-                    # Clear previous analysis.
+                    # Clear previous analysis
                     st.session_state["extraction"] = None
                     st.session_state["result"] = None
+                    st.session_state["assessment_saved"] = False
+                    st.session_state["saved_assessment_id"] = None
 
                     st.success(
-                        "ট্রান্সক্রিপশন তৈরি হয়েছে। নিচে যাচাই করুন।"
+                        "ট্রান্সক্রিপশন তৈরি হয়েছে। "
+                        "নিচে লেখাটি যাচাই করুন।"
                     )
 
                 else:
-
                     st.warning(
-                        "কোনো নির্ভরযোগ্য বাংলা লেখা শনাক্ত হয়নি। "
+                        "কোনো নির্ভরযোগ্য লেখা পাওয়া যায়নি। "
                         "আবার স্পষ্টভাবে কথা বলুন।"
                     )
+
+            else:
+                st.error(
+                    transcription.get(
+                        "error",
+                        "অডিও প্রসেস করা যায়নি।",
+                    )
+                )
 
     # -----------------------------------------------------
     # TRANSCRIPTION TEXT AREA
     # -----------------------------------------------------
 
+    st.markdown("#### ✍️ আপনার কথার লেখা")
+
     transcript = st.text_area(
-        "আপনার কথার লেখা (ভুল থাকলে সংশোধন করুন)",
+        "লেখাটি যাচাই করুন এবং প্রয়োজনে সংশোধন করুন",
         height=130,
         key="transcript_box",
-        placeholder="আপনার কথার লেখা এখানে দেখা যাবে..."
+        placeholder="আপনার সমস্যাটি এখানে লিখুন...",
     )
 
     st.session_state["transcript"] = transcript
@@ -191,72 +240,79 @@ with tab1:
     if st.button(
         "লেখা বিশ্লেষণ করুন",
         type="primary",
-        width="stretch"
+        width="stretch",
     ):
 
         clean_transcript = transcript.strip()
 
         if not clean_transcript:
 
-            st.error("আগে কথা বলুন অথবা নিচে লিখুন।")
+            st.error("আগে কথা বলুন অথবা আপনার সমস্যা লিখুন।")
 
         else:
 
-            # Remove old analysis before starting a new one.
+            # Clear old results
             st.session_state["extraction"] = None
             st.session_state["result"] = None
+            st.session_state["assessment_saved"] = False
+            st.session_state["saved_assessment_id"] = None
 
-            pregnancy_status = {
-                "হ্যাঁ": "pregnant",
-                "না": "not_pregnant",
-                "জানি না": "unknown"
-            }[pregnancy]
+            with st.spinner("লক্ষণগুলো বিশ্লেষণ করা হচ্ছে..."):
 
-            with st.spinner("লক্ষণগুলো বোঝার চেষ্টা করছি..."):
+                extraction = extract_symptoms(clean_transcript)
 
-                extraction = extract_symptoms(
-                    clean_transcript,
-                    pregnancy_status=pregnancy_status,
-                    gestational_age_weeks=int(weeks) if weeks else None
-                )
+            st.session_state["extraction"] = extraction
 
-                st.session_state["extraction"] = extraction
+            st.session_state["transcript"] = clean_transcript
 
     # -----------------------------------------------------
     # EXTRACTION RESULTS
     # -----------------------------------------------------
 
-    if st.session_state["extraction"]:
+    if st.session_state["extraction"] is not None:
 
         st.divider()
 
         st.subheader("২. শনাক্ত তথ্য যাচাই করুন")
 
-        st.caption(
-            "মডেল ভুল বুঝতে পারে। তথ্য যাচাই করুন। "
-            "'unknown' মানে তথ্য পাওয়া যায়নি—'না' নয়।"
-        )
-
         ext = st.session_state["extraction"]
 
-        # Display Gemini / fallback status.
-        if ext.get("extraction_method") == "gemini":
+        st.caption(
+            "AI ভুল বুঝতে পারে। শনাক্ত তথ্য যাচাই করুন। "
+            "তথ্য পাওয়া যায়নি মানে লক্ষণটি নেই—এমন নয়।"
+        )
+
+        # Display extraction method
+        extraction_method = ext.get(
+            "extraction_method",
+            "unknown",
+        )
+
+        if extraction_method == "gemini":
 
             st.success("Gemini AI বিশ্লেষণ সম্পন্ন হয়েছে।")
 
-        elif ext.get("extraction_method") == "fallback":
+        elif extraction_method == "keyword_fallback":
 
             st.warning(
                 "Gemini AI ব্যবহার করা যায়নি। "
                 "প্রাথমিক keyword-based fallback ব্যবহার করা হয়েছে। "
-                "এই ফলাফল স্বাস্থ্যকর্মীর মাধ্যমে যাচাই করুন।"
+                "এই ফলাফল নির্ভরযোগ্য ক্লিনিক্যাল মূল্যায়ন নয়।"
             )
 
+        else:
+
+            st.warning(
+                "লক্ষণ শনাক্তকরণ সম্পূর্ণ নির্ভরযোগ্য নয়। "
+                "স্বাস্থ্যকর্মীর মাধ্যমে তথ্য যাচাই করুন।"
+            )
+
+        # Display extracted information
         st.json(ext)
 
         st.info(
-            "প্রয়োজনে স্বাস্থ্যকর্মী তথ্য সংশোধন করে "
-            "আবার মূল্যায়ন করবেন।"
+            "এই MVP-তে শনাক্ত তথ্য সরাসরি সম্পাদনার সুবিধা নেই। "
+            "তথ্যে ভুল থাকলে মূল বক্তব্য সংশোধন করে আবার বিশ্লেষণ করুন।"
         )
 
         # -------------------------------------------------
@@ -266,85 +322,145 @@ with tab1:
         if st.button(
             "ঝুঁকি মূল্যায়ন করুন",
             type="primary",
-            width="stretch"
+            width="stretch",
         ):
 
-            with st.spinner("ঝুঁকি মূল্যায়ন করা হচ্ছে..."):
+            with st.spinner("প্রাথমিক ঝুঁকি মূল্যায়ন করা হচ্ছে..."):
 
-                st.session_state["result"] = assess(ext)
+                result = assess(ext)
+
+            st.session_state["result"] = result
+            st.session_state["assessment_saved"] = False
+            st.session_state["saved_assessment_id"] = None
 
     # -----------------------------------------------------
     # FINAL RISK RESULT
     # -----------------------------------------------------
 
-    if st.session_state["result"]:
+    if st.session_state["result"] is not None:
 
         res = st.session_state["result"]
         ext = st.session_state["extraction"]
 
         st.divider()
 
-        st.subheader("৩. মূল্যায়নের ফল")
+        st.subheader("৩. মূল্যায়নের ফলাফল")
 
-        colors = {
-            "HIGH": "🔴",
-            "MEDIUM": "🟠",
-            "LOW": "🟢",
-            "INCOMPLETE": "⚪"
+        risk_level = res.get("risk_level", "UNKNOWN")
+
+        risk_display = {
+            "HIGH": ("🔴", "উচ্চ ঝুঁকি"),
+            "MODERATE": ("🟠", "মাঝারি ঝুঁকি"),
+            "LOW": ("🟢", "প্রাথমিকভাবে কম ঝুঁকি"),
+            "UNKNOWN": ("⚪", "তথ্য অপর্যাপ্ত"),
         }
 
-        risk_level = res.get("risk_level", "INCOMPLETE")
-
-        st.markdown(
-            f"## {colors.get(risk_level, '⚪')} "
-            f"{risk_level} — "
-            f"{res.get('assessment_status', '')}"
+        icon, label = risk_display.get(
+            risk_level,
+            ("⚪", "তথ্য অপর্যাপ্ত"),
         )
 
-        st.write(res.get("explanation", ""))
+        st.markdown(f"## {icon} {label}")
 
-        triggered = res.get("triggered_symptoms", [])
+        # Reliability status
+        if res.get("assessment_reliable"):
 
-        if triggered:
+            st.caption("প্রাথমিক স্ক্রিনিং সম্পন্ন হয়েছে।")
 
-            st.write(
-                "**চিহ্নিত লক্ষণ:**",
-                ", ".join(triggered)
+        else:
+
+            st.warning(
+                "প্রাপ্ত তথ্যের ভিত্তিতে নির্ভরযোগ্য ঝুঁকি "
+                "মূল্যায়ন করা সম্ভব হয়নি।"
             )
 
-        st.markdown(
-            f"### করণীয়\n{advice_for(res)}"
-        )
+        # Reasons
+        reasons = res.get("reasons", [])
+
+        if reasons:
+
+            st.markdown("#### শনাক্ত বিষয়")
+
+            for reason in reasons:
+                st.write(f"- {reason}")
+
+        # Recommendation
+        recommendation = res.get("recommendation", "")
+
+        if recommendation:
+
+            st.markdown("#### করণীয়")
+
+            st.info(recommendation)
+
+        # Additional advice
+        advice = advice_for(res)
+
+        if advice:
+
+            st.markdown("#### স্বাস্থ্য পরামর্শ")
+
+            for item in advice:
+                st.write(f"• {item}")
 
         # -------------------------------------------------
         # REFERRAL SMS
         # -------------------------------------------------
 
-        if risk_level == "HIGH":
+        if risk_level in ("HIGH", "MODERATE", "UNKNOWN"):
 
-            sms = make_sms(ext, res)
+            st.divider()
 
-            st.subheader("রেফারেল SMS (শুধু ড্রাফট)")
+            st.subheader("রেফারেল বার্তা (ড্রাফট)")
+
+            sms = make_sms(res)
 
             st.code(sms)
 
             st.caption(
-                "এটি সিমুলেটেড SMS; কোনো বার্তা পাঠানো হয়নি।"
+                "এটি একটি ডেমো বার্তা। কোনো SMS পাঠানো হয়নি।"
             )
+
+        else:
+
+            sms = make_sms(res)
 
         # -------------------------------------------------
         # SAVE RECORD
         # -------------------------------------------------
 
-        if st.button("অ্যানোনিমাইজড রেকর্ড সংরক্ষণ করুন"):
+        st.divider()
 
-            aid = save_assessment(
-                ext,
-                res,
-                advice_for(res)
+        if not st.session_state["assessment_saved"]:
+
+            if st.button(
+                "অ্যানোনিমাইজড রেকর্ড সংরক্ষণ করুন",
+                width="stretch",
+            ):
+
+                assessment_id = save_assessment(
+                    transcript=st.session_state["transcript"],
+                    extraction=ext,
+                    result=res,
+                    advice=advice,
+                    sms=sms,
+                    gestational_weeks=int(weeks) if weeks else None,
+                    pregnancy_status=pregnancy_status,
+                )
+
+                st.session_state["assessment_saved"] = True
+                st.session_state["saved_assessment_id"] = assessment_id
+
+                st.success(
+                    f"রেকর্ড সংরক্ষণ করা হয়েছে। ID: {assessment_id}"
+                )
+
+        else:
+
+            st.success(
+                "এই মূল্যায়নের রেকর্ড ইতিমধ্যে সংরক্ষণ করা হয়েছে। "
+                f"ID: {st.session_state['saved_assessment_id']}"
             )
-
-            st.success(f"রেকর্ড সংরক্ষিত: {aid}")
 
 
 # =========================================================
@@ -361,38 +477,62 @@ with tab2:
 
         df = pd.DataFrame(records)
 
-        if "risk_level" in df.columns:
+        # -------------------------------------------------
+        # RISK SUMMARY
+        # -------------------------------------------------
 
-            a, b, c, d = st.columns(4)
+        st.markdown("#### মূল্যায়নের সারসংক্ষেপ")
 
-            for col, level in zip(
-                [a, b, c, d],
-                ["HIGH", "MEDIUM", "LOW", "INCOMPLETE"]
-            ):
+        a, b, c, d = st.columns(4)
 
-                col.metric(
-                    level,
-                    int((df["risk_level"] == level).sum())
-                )
+        risk_columns = [
+            (a, "HIGH", "উচ্চ"),
+            (b, "MODERATE", "মাঝারি"),
+            (c, "LOW", "কম"),
+            (d, "UNKNOWN", "অজানা"),
+        ]
+
+        for column, level, label in risk_columns:
+
+            count = (
+                int((df["risk_level"] == level).sum())
+                if "risk_level" in df.columns
+                else 0
+            )
+
+            column.metric(label, count)
+
+        st.divider()
+
+        # -------------------------------------------------
+        # ASSESSMENT TABLE
+        # -------------------------------------------------
+
+        st.markdown("#### সংরক্ষিত মূল্যায়ন")
 
         st.dataframe(
             df,
             width="stretch",
-            hide_index=True
+            hide_index=True,
         )
 
+        # -------------------------------------------------
+        # CSV EXPORT
+        # -------------------------------------------------
+
         st.download_button(
-            "CSV ডাউনলোড",
-            export_csv(),
-            "matrikontho_cases.csv",
-            "text/csv",
-            width="stretch"
+            label="📥 CSV ডাউনলোড করুন",
+            data=export_csv(),
+            file_name="matrikontho_cases.csv",
+            mime="text/csv",
+            width="stretch",
         )
 
     else:
 
         st.info(
-            "এখনো কোনো ডেমো মূল্যায়ন সংরক্ষিত হয়নি।"
+            "এখনো কোনো মূল্যায়ন সংরক্ষণ করা হয়নি। "
+            "নতুন মূল্যায়ন সম্পন্ন করে এখানে রেকর্ড দেখতে পারবেন।"
         )
 
 
@@ -404,11 +544,43 @@ with tab3:
 
     st.subheader("গুরুত্বপূর্ণ সীমাবদ্ধতা")
 
-    st.markdown("""
-- এটি **রোগ নির্ণয় করে না** এবং চিকিৎসা/ওষুধের পরামর্শ দেয় না।
-- ঝুঁকির নিয়মগুলো প্রাথমিক ডেমো নিয়ম; WHO/DGHS-এর অনুমোদিত ক্লিনিক্যাল প্রোটোকল হিসেবে দাবি করা হচ্ছে না।
-- বাস্তব ব্যবহারের আগে প্রসূতি ও জনস্বাস্থ্য বিশেষজ্ঞের পর্যালোচনা, স্থানীয় রেফারেল ডিরেক্টরি, নিরাপত্তা পরীক্ষা ও নৈতিক অনুমোদন দরকার।
-- Whisper/LLM বন্ধ থাকলে টেক্সট-ভিত্তিক নিয়ম ও প্রশ্ন-পরিকল্পনার fallback চালু থাকতে পারে।
-- ডেমোতে কেবল কাল্পনিক তথ্য ব্যবহার করুন।
-- ভুল বা অসম্পূর্ণ ট্রান্সক্রিপশনকে কখনোই LOW risk হিসেবে ধরে নেওয়া যাবে না।
-""")
+    st.markdown(
+        """
+        ### মাতৃকণ্ঠ কী করতে পারে?
+
+        - বাংলা বক্তব্য থেকে সম্ভাব্য মাতৃস্বাস্থ্য-সংক্রান্ত
+          লক্ষণ শনাক্ত করার চেষ্টা করে।
+        - শনাক্ত তথ্যের ভিত্তিতে একটি প্রাথমিক স্ক্রিনিং
+          অগ্রাধিকার দেখায়।
+        - সম্ভাব্য পরবর্তী পদক্ষেপ সম্পর্কে বাংলা ভাষায়
+          সাধারণ নির্দেশনা দেয়।
+        - স্বাস্থ্যকর্মীর জন্য মূল্যায়নের রেকর্ড সংরক্ষণ করে।
+
+        ### মাতৃকণ্ঠ কী করতে পারে না?
+
+        - এটি রোগ নির্ণয় করতে পারে না।
+        - এটি চিকিৎসক বা প্রশিক্ষিত স্বাস্থ্যকর্মীর বিকল্প নয়।
+        - এটি ওষুধ নির্ধারণ বা চিকিৎসা শুরু করার নির্দেশ দেয় না।
+        - এটি জরুরি চিকিৎসার বিকল্প নয়।
+
+        ### প্রযুক্তিগত ও ক্লিনিক্যাল সীমাবদ্ধতা
+
+        - Whisper-এর ট্রান্সক্রিপশন ভুল হতে পারে।
+        - Gemini ভুলভাবে লক্ষণ শনাক্ত করতে পারে।
+        - Keyword-based fallback সীমিত এবং সব ধরনের
+          বাংলা বক্তব্য বুঝতে পারে না।
+        - ঝুঁকি নির্ধারণের নিয়মগুলো প্রাথমিক ডেমো নিয়ম;
+          WHO বা DGHS-এর অনুমোদিত ক্লিনিক্যাল প্রোটোকল নয়।
+        - বাস্তব ব্যবহারের আগে প্রসূতি ও জনস্বাস্থ্য
+          বিশেষজ্ঞের পর্যালোচনা প্রয়োজন।
+        - স্থানীয় হাসপাতাল ও রেফারেল ব্যবস্থার সঙ্গে
+          সংযোগ স্থাপন করা হয়নি।
+        - ডেমোতে কেবল কাল্পনিক তথ্য ব্যবহার করুন।
+
+        ### জরুরি সতর্কতা
+
+        গুরুতর বা উদ্বেগজনক কোনো লক্ষণ দেখা দিলে
+        AI-এর উত্তরের অপেক্ষা না করে নিকটস্থ হাসপাতাল
+        বা জরুরি মাতৃস্বাস্থ্য সেবাকেন্দ্রে যান।
+        """
+    )
