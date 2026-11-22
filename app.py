@@ -131,19 +131,17 @@ for key, value in defaults.items():
 
 st.markdown("""
 <div class="hero">
-
     <div class="hero-title">
         🌸 মাতৃকণ্ঠ
     </div>
 
     <div class="big">
-        আপনার কথা শুনি, ঝুঁকি বুঝি, সাহায্যের পথ দেখাই।
+        আপনার কথা শুনি, ঝুঁকি বুঝি, সাহায্যের পথ দেখাই
     </div>
 
     <div class="hero-subtitle">
         Bangla Voice-based Maternal Risk Screener · Hackathon MVP
     </div>
-
 </div>
 """, unsafe_allow_html=True)
 
