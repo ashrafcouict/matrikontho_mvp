@@ -1,8 +1,26 @@
-
 @import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700;800&display=swap');
 
-html, body, [class*="css"], button, input, textarea {
-    font-family: 'Hind Siliguri', sans-serif !important;
+:root {
+    --font-bangla: 'Hind Siliguri', sans-serif;
+    --rose-surface: #fff1f2;
+    --amber-surface: #fef3c7;
+    --ink-primary: #4c2732;
+    --ink-secondary: #593b43;
+    --ink-muted: #76545b;
+    --border-soft: #f3d5dc;
+    --accent-rose: #be123c;
+    --accent-rose-hover: #9f1239;
+}
+
+html,
+body,
+[class*="st-"],
+button,
+input,
+textarea,
+select,
+label {
+    font-family: var(--font-bangla) !important;
 }
 
 .block-container {
@@ -14,13 +32,14 @@ html, body, [class*="css"], button, input, textarea {
 .hero {
     background: linear-gradient(
         120deg,
-        #fff1f2 0%,
-        #fef3c7 100%
+        var(--rose-surface) 0%,
+        var(--amber-surface) 100%
     );
-
+    border: 1px solid var(--border-soft);
     padding: 1.7rem 1.6rem;
     border-radius: 0 0 24px 24px;
     margin-bottom: 1rem;
+    box-shadow: 0 6px 20px rgba(99, 55, 68, 0.06);
 }
 
 .hero-brand {
@@ -31,44 +50,77 @@ html, body, [class*="css"], button, input, textarea {
 
 .hero-flower {
     font-size: 2.8rem;
+    line-height: 1.1;
 }
 
 .hero-title {
-    color: #633744 !important;
+    color: var(--ink-primary) !important;
     font-size: clamp(2.2rem, 6vw, 3.2rem);
     font-weight: 800;
-    line-height: 1.4;
+    line-height: 1.35;
     opacity: 1 !important;
     text-shadow: none !important;
     filter: none !important;
 }
 
 .hero-tagline {
-    color: #593b43 !important;
+    color: var(--ink-secondary) !important;
     font-size: clamp(1.1rem, 3vw, 1.55rem);
     font-weight: 700;
     line-height: 1.55;
+    margin-top: 0.25rem;
 }
 
 .hero-subtitle {
-    color: #76545b !important;
+    color: var(--ink-muted) !important;
     font-size: 0.95rem;
+    font-weight: 500;
     margin-top: 0.45rem;
 }
 
-div.stButton > button {
+div.stButton > button,
+div.stDownloadButton > button {
     min-height: 3rem;
     border-radius: 12px;
     font-weight: 700;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+div.stButton > button:hover,
+div.stDownloadButton > button:hover {
+    transform: translateY(-1px);
+}
+
+div.stButton > button[kind="primary"] {
+    background-color: var(--accent-rose);
+    border-color: var(--accent-rose);
+}
+
+div.stButton > button[kind="primary"]:hover {
+    background-color: var(--accent-rose-hover);
+    border-color: var(--accent-rose-hover);
+}
+
+div[data-testid="stMetric"] {
+    background-color: #fffafb;
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    padding: 0.75rem 1rem;
 }
 
 @media (max-width: 600px) {
     .block-container {
         padding-left: 1rem;
         padding-right: 1rem;
+        padding-top: 0.9rem;
     }
 
     .hero {
         padding: 1.25rem 1rem;
+        border-radius: 0 0 18px 18px;
+    }
+
+    .hero-flower {
+        font-size: 2.2rem;
     }
 }
