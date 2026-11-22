@@ -75,6 +75,45 @@ def _is_usable_bangla(text: str) -> bool:
     return (bangla_chars / content_chars) >= 0.35
 
 
+def _collect_transcript(model: WhisperModel, temp_path: str, vad_filter: bool) -> str:
+    """Run Whisper transcription with optional VAD and return joined segment text."""
+    kwargs = {
+        "language": "bn",
+        "task": "transcribe",
+        "beam_size": 5,
+        "temperature": [0.0, 0.2],
+        "vad_filter": vad_filter,
+        "condition_on_previous_text": False,
+        "no_speech_threshold": 0.85,
+        "log_prob_threshold": -2.0,
+        "compression_ratio_threshold": 2.8,
+        "initial_prompt": (
+            "বাংলা ভাষায় একজন নারী তার শারীরিক সমস্যা, "
+            "গর্ভাবস্থার লক্ষণ এবং স্বাস্থ্যগত অবস্থা বর্ণনা করছেন।"
+        ),
+    }
+
+    if vad_filter:
+        kwargs["vad_parameters"] = {
+            "threshold": 0.35,
+            "min_speech_duration_ms": 150,
+            "min_silence_duration_ms": 600,
+            "speech_pad_ms": 500,
+        }
+
+    segments, _info = model.transcribe(temp_path, **kwargs)
+
+    return " ".join(
+        segment.text.strip()
+        for segment in segments
+        if getattr(segment, "text", None)
+        and segment.text.strip()
+        and getattr(segment, "no_speech_prob", 0.0) < 0.90
+        and getattr(segment, "avg_logprob", 0.0) > -2.0
+        and getattr(segment, "compression_ratio", 1.0) < 2.8
+    ).strip()
+
+
 def transcribe_audio(audio_file):
     """
     Accepts a Streamlit UploadedFile, recorded audio buffer, or file-like object.
@@ -119,32 +158,11 @@ def transcribe_audio(audio_file):
 
         model = _get_model()
 
-        segments, _info = model.transcribe(
-            temp_path,
-            language="bn",
-            task="transcribe",
-            beam_size=5,
-            temperature=0.0,
-            vad_filter=True,
-            condition_on_previous_text=False,
-            no_speech_threshold=0.6,
-            log_prob_threshold=-1.0,
-            compression_ratio_threshold=2.4,
-            initial_prompt=(
-                "বাংলা ভাষায় একজন নারী তার শারীরিক সমস্যা, "
-                "গর্ভাবস্থার লক্ষণ এবং স্বাস্থ্যগত অবস্থা বর্ণনা করছেন।"
-            ),
-        )
+        text = _collect_transcript(model, temp_path, vad_filter=True)
 
-        text = " ".join(
-            segment.text.strip()
-            for segment in segments
-            if getattr(segment, "text", None)
-            and segment.text.strip()
-            and getattr(segment, "no_speech_prob", 0.0) < 0.65
-            and getattr(segment, "avg_logprob", 0.0) > -1.1
-            and getattr(segment, "compression_ratio", 1.0) < 2.4
-        ).strip()
+        # Retry without VAD in case leading silence, short clips, or low mic gain caused VAD to drop speech
+        if not text:
+            text = _collect_transcript(model, temp_path, vad_filter=False)
 
         if not text:
             return {
