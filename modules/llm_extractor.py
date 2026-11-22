@@ -44,13 +44,13 @@ def _get_api_settings():
         api_key = st.secrets.get("GEMINI_API_KEY", "")
         model_name = st.secrets.get(
             "GEMINI_MODEL",
-            "gemini-2.5-flash",
+            "gemini-3.8-flash",
         )
     except Exception:
         api_key = os.getenv("GEMINI_API_KEY", "")
         model_name = os.getenv(
             "GEMINI_MODEL",
-            "gemini-2.5-flash",
+            "gemini-3.8-flash",
         )
 
     return (api_key or os.getenv("GEMINI_API_KEY", "")).strip(), model_name
