@@ -29,81 +29,18 @@ init_db()
 
 
 # =========================================================
-# 2. CUSTOM CSS
+# 2. LOAD CUSTOM CSS
 # =========================================================
 
-st.markdown("""
-<style>
+from pathlib import Path
 
-@import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700;800&display=swap');
+css_path = Path(__file__).parent / "style.css"
 
-html, body, [class*="css"], button, input, textarea {
-    font-family: 'Hind Siliguri', sans-serif !important;
-}
-
-.block-container {
-    max-width: 900px;
-    padding-top: 1.2rem;
-    padding-bottom: 3rem;
-}
-
-.hero {
-    background: linear-gradient(120deg, #fff0ed, #fff3c4);
-    padding: 28px;
-    border-radius: 22px;
-    margin-bottom: 20px;
-}
-
-.hero-title {
-    color: #7b2638;
-    font-family: 'Hind Siliguri', sans-serif;
-    font-size: 42px;
-    font-weight: 700;
-    text-align: center;
-}
-
-.big {
-    color: #512b32;
-    font-family: 'Hind Siliguri', sans-serif;
-    font-size: 25px;
-    font-weight: 600;
-    text-align: center;
-    margin-top: 12px;
-}
-
-.hero-subtitle {
-    color: #72535a;
-    font-size: 15px;
-    text-align: center;
-    margin-top: 12px;
-}
-
-div.stButton > button {
-    min-height: 3rem;
-    border-radius: 12px;
-    font-weight: 700;
-}
-
-div[data-testid="stMetric"] {
-    background: rgba(128, 128, 128, 0.08);
-    padding: 0.8rem;
-    border-radius: 12px;
-}
-
-@media (max-width: 600px) {
-    .block-container {
-        padding-left: 1rem;
-        padding-right: 1rem;
-    }
-
-    .hero {
-        padding: 1.1rem;
-    }
-}
-
-</style>
-""", unsafe_allow_html=True)
-
+with open(css_path, encoding="utf-8") as f:
+    st.markdown(
+        f"<style>{f.read()}</style>",
+        unsafe_allow_html=True
+    )
 
 # =========================================================
 # 3. SESSION STATE
