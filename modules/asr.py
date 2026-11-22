@@ -1,79 +1,125 @@
-
 import os
 import tempfile
+import threading
+import unicodedata
 from pathlib import Path
 
 from faster_whisper import WhisperModel
 
-
 _MODEL = None
+_MODEL_LOCK = threading.Lock()
 
 
-def _get_model():
-    """Load Whisper once and reuse it during the Streamlit session."""
+def _default_compute_type(device: str) -> str:
+    explicit = os.getenv("WHISPER_COMPUTE_TYPE", "").strip()
+    if explicit:
+        return explicit
+    return "float16" if device.lower() == "cuda" else "int8"
+
+
+def _get_model() -> WhisperModel:
+    """Load Whisper once and reuse it safely across requests."""
     global _MODEL
 
-    if _MODEL is None:
-        model_name = os.getenv("WHISPER_MODEL", "small")
+    if _MODEL is not None:
+        return _MODEL
 
-        _MODEL = WhisperModel(
-            model_name,
-            device=os.getenv("WHISPER_DEVICE", "cpu"),
-            compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
-        )
+    with _MODEL_LOCK:
+        if _MODEL is None:
+            model_name = os.getenv("WHISPER_MODEL", "small").strip() or "small"
+            device = os.getenv("WHISPER_DEVICE", "cpu").strip() or "cpu"
+            compute_type = _default_compute_type(device)
+
+            _MODEL = WhisperModel(
+                model_name,
+                device=device,
+                compute_type=compute_type,
+            )
 
     return _MODEL
 
 
 def _is_usable_bangla(text: str) -> bool:
-    """Basic script-quality check, not a complete language detector."""
-    text = (text or "").strip()
-
-    if len(text) < 3:
+    """
+    Basic script-quality check for Bangla transcripts.
+    Not a full language detector; allows occasional English medical terms
+    while rejecting mostly non-Bangla or noise output.
+    """
+    cleaned = (text or "").strip()
+    if len(cleaned) < 2:
         return False
 
-    bangla_chars = sum(
-        1 for char in text
-        if "\u0980" <= char <= "\u09FF"
-    )
+    bangla_chars = 0
+    latin_chars = 0
+    content_chars = 0
 
-    meaningful_chars = sum(1 for char in text if char.isalpha())
+    for char in cleaned:
+        category = unicodedata.category(char)
+        # Skip whitespace and punctuation/symbols when measuring script ratio
+        if category.startswith(("Z", "P", "S")):
+            continue
 
-    if meaningful_chars == 0:
+        content_chars += 1
+        if "\u0980" <= char <= "\u09FF":
+            bangla_chars += 1
+        elif ("A" <= char <= "Z") or ("a" <= char <= "z"):
+            latin_chars += 1
+
+    if content_chars == 0:
         return False
 
-    return bangla_chars / meaningful_chars >= 0.35
+    # Reject transcripts dominated by Latin characters (e.g., accidental English song/noise)
+    if latin_chars > bangla_chars and bangla_chars == 0:
+        return False
+
+    return (bangla_chars / content_chars) >= 0.35
 
 
 def transcribe_audio(audio_file):
     """
-    Accepts a Streamlit UploadedFile or file-like audio object.
+    Accepts a Streamlit UploadedFile, recorded audio buffer, or file-like object.
 
     Returns:
         {
             "success": bool,
             "text": str,
-            "error": str | None
+            "error": str | None,
         }
     """
+    if audio_file is None or not callable(getattr(audio_file, "read", None)):
+        return {
+            "success": False,
+            "text": "",
+            "error": "কোনো বৈধ অডিও ইনপুট পাওয়া যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।",
+        }
+
     temp_path = None
 
     try:
-        suffix = Path(getattr(audio_file, "name", "audio.wav")).suffix
-        if not suffix:
+        raw_name = getattr(audio_file, "name", "") or "audio.wav"
+        suffix = Path(raw_name).suffix.lower()
+        if suffix not in {".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac"}:
             suffix = ".wav"
 
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=suffix
-        ) as temp_file:
-            audio_file.seek(0)
-            temp_file.write(audio_file.read())
+        seeker = getattr(audio_file, "seek", None)
+        if callable(seeker):
+            seeker(0)
+
+        payload = audio_file.read()
+        if not payload:
+            return {
+                "success": False,
+                "text": "",
+                "error": "অডিও ফাইলটি খালি। অনুগ্রহ করে আবার রেকর্ড করুন বা আপলোড করুন।",
+            }
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(payload)
             temp_path = temp_file.name
 
         model = _get_model()
 
-        segments, info = model.transcribe(
+        segments, _info = model.transcribe(
             temp_path,
             language="bn",
             task="transcribe",
@@ -85,7 +131,7 @@ def transcribe_audio(audio_file):
             log_prob_threshold=-1.0,
             compression_ratio_threshold=2.4,
             initial_prompt=(
-                "বাংলা ভাষায় একজন গর্ভবতী নারী তার শারীরিক সমস্যা, "
+                "বাংলা ভাষায় একজন নারী তার শারীরিক সমস্যা, "
                 "গর্ভাবস্থার লক্ষণ এবং স্বাস্থ্যগত অবস্থা বর্ণনা করছেন।"
             ),
         )
@@ -93,10 +139,11 @@ def transcribe_audio(audio_file):
         text = " ".join(
             segment.text.strip()
             for segment in segments
-            if segment.text and segment.text.strip()
-            and segment.no_speech_prob < 0.65
-            and segment.avg_logprob > -1.1
-            and segment.compression_ratio < 2.4
+            if getattr(segment, "text", None)
+            and segment.text.strip()
+            and getattr(segment, "no_speech_prob", 0.0) < 0.65
+            and getattr(segment, "avg_logprob", 0.0) > -1.1
+            and getattr(segment, "compression_ratio", 1.0) < 2.4
         ).strip()
 
         if not text:
@@ -122,13 +169,16 @@ def transcribe_audio(audio_file):
             "error": None,
         }
 
-    except Exception as exc:
+    except Exception:
         return {
             "success": False,
             "text": "",
-            "error": f"অডিও প্রসেস করা যায়নি: {str(exc)}",
+            "error": "অডিও প্রসেস করা যায়নি। ফাইলটি সঠিক কি না যাচাই করে আবার চেষ্টা করুন।",
         }
 
     finally:
         if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
