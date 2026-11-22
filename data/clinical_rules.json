@@ -1,0 +1,19 @@
+{
+  "notice": "DEMO ONLY. Not a WHO/DGHS-approved protocol. Requires qualified maternal-health review.",
+  "high": {
+    "vaginal_bleeding": "DEMO-HIGH-01",
+    "convulsions": "DEMO-HIGH-02",
+    "headache+blurred_vision": "DEMO-HIGH-03",
+    "reduced_fetal_movement": "DEMO-HIGH-04",
+    "severe_abdominal_pain": "DEMO-HIGH-05",
+    "severe_breathing_difficulty": "DEMO-HIGH-06",
+    "fever+severe_weakness": "DEMO-HIGH-07"
+  },
+  "medium": [
+    "facial_hand_swelling",
+    "fever",
+    "headache",
+    "abdominal_pain",
+    "breathing_difficulty"
+  ]
+}
