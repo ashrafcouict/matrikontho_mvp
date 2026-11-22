@@ -1,4 +1,4 @@
-
+from contextlib import closing
 import csv
 import io
 import json
@@ -7,40 +7,70 @@ from datetime import datetime
 from pathlib import Path
 
 
-DB_PATH = Path("data") / "matrikontho.db"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = REPO_ROOT / "data" / "matrikontho.db"
+
+TABLE_COLUMNS = [
+    ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+    ("created_at", "TEXT NOT NULL"),
+    ("patient_name", "TEXT"),
+    ("pregnancy_status", "TEXT"),
+    ("gestational_weeks", "INTEGER"),
+    ("transcript", "TEXT"),
+    ("extraction_method", "TEXT"),
+    ("extraction_json", "TEXT"),
+    ("risk_level", "TEXT"),
+    ("reasons", "TEXT"),
+    ("recommendation", "TEXT"),
+    ("advice", "TEXT"),
+    ("referral_sms", "TEXT"),
+]
+
+EXPORT_HEADERS = [name for name, _ in TABLE_COLUMNS]
 
 
 def _get_connection():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    target_path = Path(DB_PATH)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(target_path)
     connection.row_factory = sqlite3.Row
-
     return connection
 
 
 def init_db():
-    """Create the assessment table if it does not already exist."""
-    with _get_connection() as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS assessments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT NOT NULL,
-                patient_name TEXT,
-                pregnancy_status TEXT,
-                gestational_weeks INTEGER,
-                transcript TEXT,
-                extraction_method TEXT,
-                extraction_json TEXT,
-                risk_level TEXT,
-                reasons TEXT,
-                recommendation TEXT,
-                advice TEXT,
-                referral_sms TEXT
+    """Create the assessment table and apply lightweight column migrations if needed."""
+    with closing(_get_connection()) as connection:
+        with connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS assessments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    patient_name TEXT,
+                    pregnancy_status TEXT,
+                    gestational_weeks INTEGER,
+                    transcript TEXT,
+                    extraction_method TEXT,
+                    extraction_json TEXT,
+                    risk_level TEXT,
+                    reasons TEXT,
+                    recommendation TEXT,
+                    advice TEXT,
+                    referral_sms TEXT
+                )
+                """
             )
-            """
-        )
+
+            existing_cols = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(assessments)").fetchall()
+            }
+            for col_name, col_def in TABLE_COLUMNS:
+                if col_name not in existing_cols and "PRIMARY KEY" not in col_def:
+                    connection.execute(
+                        f"ALTER TABLE assessments ADD COLUMN {col_name} {col_def}"
+                    )
 
 
 def save_assessment(
@@ -54,58 +84,74 @@ def save_assessment(
     patient_name=None,
 ):
     """Save one assessment and return its database ID."""
+    init_db()
+
     extraction = extraction if isinstance(extraction, dict) else {}
     result = result if isinstance(result, dict) else {}
 
     advice_text = (
-        "\n".join(advice)
+        "\n".join(str(item) for item in advice if item is not None)
         if isinstance(advice, list)
         else str(advice or "")
     )
 
     reasons = result.get("reasons", [])
+    if not isinstance(reasons, list):
+        reasons = [str(reasons)] if reasons else []
 
-    with _get_connection() as connection:
-        cursor = connection.execute(
-            """
-            INSERT INTO assessments (
-                created_at,
-                patient_name,
-                pregnancy_status,
-                gestational_weeks,
-                transcript,
-                extraction_method,
-                extraction_json,
-                risk_level,
-                reasons,
-                recommendation,
-                advice,
-                referral_sms
+    clean_weeks = (
+        int(gestational_weeks)
+        if isinstance(gestational_weeks, (int, float))
+        and not isinstance(gestational_weeks, bool)
+        and gestational_weeks > 0
+        else None
+    )
+
+    with closing(_get_connection()) as connection:
+        with connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO assessments (
+                    created_at,
+                    patient_name,
+                    pregnancy_status,
+                    gestational_weeks,
+                    transcript,
+                    extraction_method,
+                    extraction_json,
+                    risk_level,
+                    reasons,
+                    recommendation,
+                    advice,
+                    referral_sms
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    datetime.now().isoformat(timespec="seconds"),
+                    patient_name,
+                    pregnancy_status,
+                    clean_weeks,
+                    transcript or "",
+                    extraction.get("extraction_method", "unknown"),
+                    json.dumps(extraction, ensure_ascii=False),
+                    str(result.get("risk_level", "UNKNOWN")).upper(),
+                    json.dumps(reasons, ensure_ascii=False),
+                    str(result.get("recommendation", "")),
+                    advice_text,
+                    str(sms or ""),
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                datetime.now().isoformat(timespec="seconds"),
-                patient_name,
-                pregnancy_status,
-                gestational_weeks,
-                transcript or "",
-                extraction.get("extraction_method", "unknown"),
-                json.dumps(extraction, ensure_ascii=False),
-                result.get("risk_level", "UNKNOWN"),
-                json.dumps(reasons, ensure_ascii=False),
-                result.get("recommendation", ""),
-                advice_text,
-                sms or "",
-            ),
-        )
 
-        return cursor.lastrowid
+            return cursor.lastrowid
 
 
 def list_assessments(limit=200):
     """Return recent assessments as dictionaries for the dashboard."""
-    with _get_connection() as connection:
+    init_db()
+    safe_limit = max(1, int(limit))
+
+    with closing(_get_connection()) as connection:
         rows = connection.execute(
             """
             SELECT
@@ -125,7 +171,7 @@ def list_assessments(limit=200):
             ORDER BY id DESC
             LIMIT ?
             """,
-            (int(limit),),
+            (safe_limit,),
         ).fetchall()
 
     records = []
@@ -134,7 +180,10 @@ def list_assessments(limit=200):
         record = dict(row)
 
         try:
-            record["reasons"] = json.loads(record["reasons"] or "[]")
+            parsed_reasons = json.loads(record["reasons"] or "[]")
+            record["reasons"] = (
+                parsed_reasons if isinstance(parsed_reasons, list) else []
+            )
         except json.JSONDecodeError:
             record["reasons"] = []
 
@@ -145,10 +194,25 @@ def list_assessments(limit=200):
 
 def export_csv():
     """Return all assessment records as CSV text."""
-    with _get_connection() as connection:
+    init_db()
+
+    with closing(_get_connection()) as connection:
         rows = connection.execute(
             """
-            SELECT *
+            SELECT
+                id,
+                created_at,
+                patient_name,
+                pregnancy_status,
+                gestational_weeks,
+                transcript,
+                extraction_method,
+                extraction_json,
+                risk_level,
+                reasons,
+                recommendation,
+                advice,
+                referral_sms
             FROM assessments
             ORDER BY id DESC
             """
@@ -158,11 +222,11 @@ def export_csv():
     writer = csv.writer(output)
 
     if rows:
-        writer.writerow(rows[0].keys())
-
+        headers = list(rows[0].keys())
+        writer.writerow(headers)
         for row in rows:
-            writer.writerow([row[key] for key in row.keys()])
+            writer.writerow([row[key] for key in headers])
     else:
-        writer.writerow(["No assessment records"])
+        writer.writerow(EXPORT_HEADERS)
 
     return output.getvalue()
