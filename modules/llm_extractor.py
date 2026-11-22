@@ -1,4 +1,3 @@
-
 import json
 import os
 import re
@@ -8,62 +7,121 @@ import streamlit as st
 from google import genai
 from google.genai.errors import APIError
 
+SYMPTOM_FIELDS = [
+    "bleeding",
+    "severe_headache",
+    "blurred_vision",
+    "swelling_face_hands",
+    "severe_abdominal_pain",
+    "fever",
+    "difficulty_breathing",
+    "convulsions",
+    "reduced_fetal_movement",
+    "water_breaking",
+]
+
+NEGATION_MARKERS = [
+    "নেই",
+    "নাই",
+    "হচ্ছে না",
+    "হয় না",
+    "হয় না",
+    "পড়ছে না",
+    "পড়ছে না",
+    "যাচ্ছে না",
+    "নড়ছে না",
+    "নড়ছে না",
+    "কম নড়ছে",
+    "কম নড়ছে",
+    "no ",
+    "not ",
+    "without ",
+]
+
 
 def _get_api_settings():
     try:
         api_key = st.secrets.get("GEMINI_API_KEY", "")
         model_name = st.secrets.get(
             "GEMINI_MODEL",
-            "gemini-2.5-flash"
+            "gemini-2.5-flash",
         )
     except Exception:
         api_key = os.getenv("GEMINI_API_KEY", "")
         model_name = os.getenv(
             "GEMINI_MODEL",
-            "gemini-2.5-flash"
+            "gemini-2.5-flash",
         )
 
-    return api_key or os.getenv("GEMINI_API_KEY", ""), model_name
+    return (api_key or os.getenv("GEMINI_API_KEY", "")).strip(), model_name
 
 
 def _empty_extraction(transcript, method="fallback"):
-    return {
+    data = {
         "transcript": transcript,
         "extraction_method": method,
         "extraction_success": False,
         "needs_clarification": True,
         "symptoms": [],
-        "bleeding": None,
-        "severe_headache": None,
-        "blurred_vision": None,
-        "swelling_face_hands": None,
-        "severe_abdominal_pain": None,
-        "fever": None,
-        "difficulty_breathing": None,
-        "convulsions": None,
-        "reduced_fetal_movement": None,
-        "water_breaking": None,
-        "other_symptoms": [],
-        "duration": None,
-        "severity": None,
-        "notes": "নির্ভরযোগ্যভাবে লক্ষণ শনাক্ত করা যায়নি।",
     }
+    for field in SYMPTOM_FIELDS:
+        data[field] = None
+    data.update(
+        {
+            "other_symptoms": [],
+            "duration": None,
+            "severity": None,
+            "notes": "নির্ভরযোগ্যভাবে লক্ষণ শনাক্ত করা যায়নি।",
+        }
+    )
+    return data
 
 
 def _parse_json(text):
-    text = (text or "").strip()
+    cleaned = (text or "").strip()
 
     # Remove Markdown code fences if the model adds them.
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
 
     try:
-        return json.loads(text)
+        parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
+        start = cleaned.find("{")
+        if start == -1:
             raise ValueError("Gemini did not return valid JSON.")
-        return json.loads(match.group(0))
+        decoder = json.JSONDecoder()
+        parsed, _ = decoder.raw_decode(cleaned[start:])
+
+    if not isinstance(parsed, dict):
+        raise ValueError("Top-level JSON value must be an object.")
+
+    return parsed
+
+
+def _sanitize_str_list(value):
+    if not isinstance(value, list):
+        return []
+    items = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text and text not in items:
+                items.append(text)
+    return items
+
+
+def _is_negated_around(text, keyword):
+    """Heuristic check for Bangla/English negation near a matched keyword."""
+    idx = text.find(keyword)
+    if idx == -1:
+        return False
+
+    window_start = max(0, idx - 12)
+    window_end = min(len(text), idx + len(keyword) + 24)
+    window = text[window_start:window_end]
+
+    return any(marker in window for marker in NEGATION_MARKERS)
 
 
 def _fallback_extraction(transcript):
@@ -76,58 +134,90 @@ def _fallback_extraction(transcript):
 
     patterns = {
         "bleeding": [
-            "রক্তপাত", "রক্ত যাচ্ছে", "রক্ত পড়ছে",
-            "bleeding", "blood"
+            "রক্তপাত",
+            "রক্ত যাচ্ছে",
+            "রক্ত পড়ছে",
+            "রক্ত পড়ছে",
+            "bleeding",
+            "blood",
         ],
         "severe_headache": [
-            "তীব্র মাথাব্যথা", "অনেক মাথা ব্যথা",
-            "মাথা প্রচণ্ড ব্যথা"
+            "তীব্র মাথাব্যথা",
+            "অনেক মাথা ব্যথা",
+            "মাথা প্রচণ্ড ব্যথা",
+            "মাথা প্রচন্ড ব্যথা",
         ],
         "blurred_vision": [
-            "ঝাপসা", "চোখে ঝাপসা", "চোখে কম দেখি"
+            "ঝাপসা",
+            "চোখে ঝাপসা",
+            "চোখে কম দেখি",
         ],
         "swelling_face_hands": [
-            "মুখ ফুলে", "হাত ফুলে", "হঠাৎ ফুলে",
-            "মুখ ও হাত ফুলে"
+            "মুখ ফুলে",
+            "হাত ফুলে",
+            "হঠাৎ ফুলে",
+            "মুখ ও হাত ফুলে",
         ],
         "severe_abdominal_pain": [
-            "তীব্র পেট ব্যথা", "প্রচণ্ড পেট ব্যথা",
-            "পেটে অনেক ব্যথা"
+            "তীব্র পেট ব্যথা",
+            "প্রচণ্ড পেট ব্যথা",
+            "প্রচন্ড পেট ব্যথা",
+            "পেটে অনেক ব্যথা",
         ],
         "fever": [
-            "জ্বর", "অনেক জ্বর"
+            "জ্বর",
+            "অনেক জ্বর",
         ],
         "difficulty_breathing": [
-            "শ্বাসকষ্ট", "শ্বাস নিতে কষ্ট",
-            "দম নিতে কষ্ট"
+            "শ্বাসকষ্ট",
+            "শ্বাস নিতে কষ্ট",
+            "দম নিতে কষ্ট",
         ],
         "convulsions": [
-            "খিঁচুনি", "খিচুনি"
+            "খিঁচুনি",
+            "খিচুনি",
         ],
         "reduced_fetal_movement": [
-            "বাচ্চা নড়ছে না", "বাচ্চা কম নড়ছে",
-            "বাচ্চার নড়াচড়া কম"
+            "বাচ্চা নড়ছে না",
+            "বাচ্চা নড়ছে না",
+            "বাচ্চা কম নড়ছে",
+            "বাচ্চা কম নড়ছে",
+            "বাচ্চার নড়াচড়া কম",
+            "বাচ্চার নড়াচড়া কম",
         ],
         "water_breaking": [
-            "পানি ভেঙে", "পানি বের হচ্ছে",
-            "গর্ভের পানি"
+            "পানি ভেঙে",
+            "পানি ভেঙ্গে",
+            "পানি বের হচ্ছে",
+            "গর্ভের পানি",
         ],
     }
 
-    result = _empty_extraction(transcript)
-
+    result = _empty_extraction(transcript, method="keyword_fallback")
     found = []
 
     for symptom, keywords in patterns.items():
-        matched = any(keyword in text for keyword in keywords)
-        result[symptom] = True if matched else None
+        positive_match = False
+        negated_match = False
 
-        if matched:
+        for keyword in keywords:
+            if keyword in text:
+                if _is_negated_around(text, keyword):
+                    negated_match = True
+                else:
+                    positive_match = True
+                    break
+
+        if positive_match:
+            result[symptom] = True
             found.append(symptom)
+        elif negated_match:
+            result[symptom] = False
+        else:
+            result[symptom] = None
 
     result["symptoms"] = found
     result["other_symptoms"] = []
-    result["extraction_method"] = "keyword_fallback"
     result["extraction_success"] = bool(found)
     result["needs_clarification"] = True
 
@@ -140,7 +230,17 @@ def _fallback_extraction(transcript):
     return result
 
 
-def extract_symptoms(transcript):
+def _format_context_block(context):
+    if not isinstance(context, dict) or not context:
+        return "Context: Not provided."
+
+    status = context.get("pregnancy_status") or "unknown"
+    weeks = context.get("gestational_weeks")
+    weeks_text = f"{weeks} weeks" if weeks is not None else "unknown/not provided"
+    return f"Context: pregnancy_status={status}, gestational_weeks={weeks_text}"
+
+
+def extract_symptoms(transcript, context=None):
     """
     Extract symptom information from a Bangla transcript.
 
@@ -156,6 +256,8 @@ def extract_symptoms(transcript):
 
     if not api_key:
         return _fallback_extraction(transcript)
+
+    context_line = _format_context_block(context)
 
     prompt = f"""
 তুমি মাতৃকণ্ঠ নামের একটি maternal-health screening support system-এর
@@ -193,6 +295,7 @@ Boolean fields must be true, false, or null.
 symptoms and other_symptoms must be arrays of strings.
 Do not add keys outside this schema.
 
+{context_line}
 User statement:
 {transcript}
 """
@@ -232,46 +335,36 @@ User statement:
 
         data = _parse_json(raw_text)
 
-        allowed_fields = [
-            "bleeding",
-            "severe_headache",
-            "blurred_vision",
-            "swelling_face_hands",
-            "severe_abdominal_pain",
-            "fever",
-            "difficulty_breathing",
-            "convulsions",
-            "reduced_fetal_movement",
-            "water_breaking",
-        ]
-
         result = _empty_extraction(transcript, method="gemini")
         result["extraction_success"] = True
         result["needs_clarification"] = False
 
-        for field in allowed_fields:
+        detected_flags = []
+        for field in SYMPTOM_FIELDS:
             value = data.get(field)
-
             if value not in (True, False, None):
                 value = None
-
             result[field] = value
+            if value is True:
+                detected_flags.append(field)
 
-        result["symptoms"] = (
-            data.get("symptoms")
-            if isinstance(data.get("symptoms"), list)
-            else []
-        )
+        raw_symptoms = _sanitize_str_list(data.get("symptoms"))
+        merged_symptoms = list(detected_flags)
+        for item in raw_symptoms:
+            if item not in merged_symptoms:
+                merged_symptoms.append(item)
 
-        result["other_symptoms"] = (
-            data.get("other_symptoms")
-            if isinstance(data.get("other_symptoms"), list)
-            else []
-        )
+        result["symptoms"] = merged_symptoms
+        result["other_symptoms"] = _sanitize_str_list(data.get("other_symptoms"))
 
-        result["duration"] = data.get("duration")
-        result["severity"] = data.get("severity")
-        result["notes"] = str(data.get("notes", ""))
+        duration = data.get("duration")
+        result["duration"] = duration.strip() if isinstance(duration, str) and duration.strip() else None
+
+        severity = data.get("severity")
+        result["severity"] = severity.strip() if isinstance(severity, str) and severity.strip() else None
+
+        notes = data.get("notes")
+        result["notes"] = notes.strip() if isinstance(notes, str) else ""
 
         return result
 
