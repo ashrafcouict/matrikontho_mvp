@@ -48,37 +48,34 @@ html, body, [class*="css"], button, input, textarea {
 }
 
 .hero {
-    background: linear-gradient(
-        120deg,
-        #fff1f2,
-        #fef3c7
-    );
-    padding: 1.5rem;
-    border-radius: 18px;
-    margin-bottom: 1rem;
+    background: linear-gradient(120deg, #fff0ed, #fff3c4);
+    padding: 28px;
+    border-radius: 22px;
+    margin-bottom: 20px;
 }
 
 .hero-title {
-    color: #633744 !important;
-    font-size: clamp(2.2rem, 6vw, 3.2rem);
-    font-weight: 800;
-    line-height: 1.5;
-    text-shadow: none !important;
-    filter: none !important;
-    opacity: 1 !important;
+    color: #7b2638;
+    font-family: 'Hind Siliguri', sans-serif;
+    font-size: 42px;
+    font-weight: 700;
+    text-align: center;
 }
 
 .big {
-    color: #593b43 !important;
-    font-size: 1.25rem;
-    font-weight: 700;
-    line-height: 1.6;
+    color: #512b32;
+    font-family: 'Hind Siliguri', sans-serif;
+    font-size: 25px;
+    font-weight: 600;
+    text-align: center;
+    margin-top: 12px;
 }
 
 .hero-subtitle {
-    color: #76545b !important;
-    font-size: 0.95rem;
-    margin-top: 0.5rem;
+    color: #72535a;
+    font-size: 15px;
+    text-align: center;
+    margin-top: 12px;
 }
 
 div.stButton > button {
