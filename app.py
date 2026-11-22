@@ -1,20 +1,20 @@
-
-import streamlit as st
-import pandas as pd
-
+import inspect
 from pathlib import Path
 
-from modules.asr import transcribe_audio
-from modules.llm_extractor import extract_symptoms
-from modules.triage_engine import assess
+import pandas as pd
+import streamlit as st
+
 from modules.advice_generator import advice_for
-from modules.referral_sms import make_sms
+from modules.asr import transcribe_audio
 from modules.database import (
-    init_db,
-    save_assessment,
-    list_assessments,
     export_csv,
+    init_db,
+    list_assessments,
+    save_assessment,
 )
+from modules.llm_extractor import extract_symptoms
+from modules.referral_sms import make_sms
+from modules.triage_engine import assess
 
 
 # =========================================================
@@ -35,26 +35,55 @@ init_db()
 # 2. LOAD CUSTOM CSS
 # =========================================================
 
-css_path = Path(__file__).parent / "style.css"
+def load_stylesheet() -> None:
+    base_dir = Path(__file__).parent
+    candidate_paths = [
+        base_dir / "assets" / "styles.css",
+        base_dir / "style.css",
+    ]
 
-try:
-    css_content = css_path.read_text(encoding="utf-8")
+    for css_path in candidate_paths:
+        if css_path.exists():
+            css_content = css_path.read_text(encoding="utf-8")
+            st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
+            return
 
-    st.markdown(
-        f"<style>{css_content}</style>",
-        unsafe_allow_html=True,
-    )
-
-except FileNotFoundError:
     st.warning(
-        "style.css পাওয়া যায়নি। "
-        "প্রজেক্ট ফোল্ডারে style.css ফাইলটি রাখুন।"
+        "CSS ফাইল পাওয়া যায়নি। "
+        "assets/styles.css অথবা style.css ফাইলটি রাখুন।"
     )
 
 
+load_stylesheet()
+
+
 # =========================================================
-# 3. SESSION STATE
+# 3. HELPERS & SESSION STATE
 # =========================================================
+
+def call_with_optional_context(func, *args, context=None, extraction=None):
+    """Call module functions with extra context only if their signature supports it."""
+    sig = inspect.signature(func)
+    params = sig.parameters
+    accepts_kwargs = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+    kwargs = {}
+    if context is not None and (accepts_kwargs or "context" in params):
+        kwargs["context"] = context
+    if extraction is not None and (accepts_kwargs or "extraction" in params):
+        kwargs["extraction"] = extraction
+
+    return func(*args, **kwargs)
+
+
+def reset_analysis_state() -> None:
+    st.session_state["extraction"] = None
+    st.session_state["result"] = None
+    st.session_state["assessment_saved"] = False
+    st.session_state["saved_assessment_id"] = None
+
 
 defaults = {
     "transcript": "",
@@ -63,6 +92,7 @@ defaults = {
     "result": None,
     "assessment_saved": False,
     "saved_assessment_id": None,
+    "last_context_key": None,
 }
 
 for key, value in defaults.items():
@@ -77,20 +107,16 @@ for key, value in defaults.items():
 st.markdown(
     """
     <div class="hero">
-
         <div class="hero-brand">
-            <span class="hero-flower">🌸</span>
+            <span class="hero-flower" aria-hidden="true">🌸</span>
             <span class="hero-title">মাতৃকণ্ঠ</span>
         </div>
-
         <div class="hero-tagline">
             আপনার কথা শুনি, ঝুঁকি বুঝি, সাহায্যের পথ দেখাই
         </div>
-
         <div class="hero-subtitle">
             Bangla Voice-based Maternal Risk Screener · Hackathon MVP
         </div>
-
     </div>
     """,
     unsafe_allow_html=True,
@@ -154,6 +180,27 @@ with tab1:
         "জানি না": "unknown",
     }[pregnancy]
 
+    normalized_weeks = int(weeks) if weeks else None
+    case_context = {
+        "pregnancy_status": pregnancy_status,
+        "gestational_weeks": normalized_weeks,
+    }
+
+    current_context_key = (pregnancy_status, normalized_weeks)
+    if (
+        st.session_state["last_context_key"] is not None
+        and st.session_state["last_context_key"] != current_context_key
+        and (
+            st.session_state["extraction"] is not None
+            or st.session_state["result"] is not None
+        )
+    ):
+        reset_analysis_state()
+        st.info(
+            "গর্ভাবস্থার তথ্য পরিবর্তিত হয়েছে। নতুন তথ্য অনুযায়ী আবার বিশ্লেষণ ও মূল্যায়ন করুন।"
+        )
+    st.session_state["last_context_key"] = current_context_key
+
     # -----------------------------------------------------
     # AUDIO INPUT
     # -----------------------------------------------------
@@ -171,7 +218,19 @@ with tab1:
         key="uploaded_audio",
     )
 
-    selected_audio = audio if audio is not None else uploaded
+    selected_audio = None
+    if audio is not None and uploaded is not None:
+        audio_source = st.radio(
+            "কোন অডিও উৎস থেকে লেখা তৈরি করবেন?",
+            ["আপলোড করা ফাইল", "মাইক্রোফোন রেকর্ডিং"],
+            horizontal=True,
+            key="audio_source_choice",
+        )
+        selected_audio = uploaded if audio_source == "আপলোড করা ফাইল" else audio
+    elif uploaded is not None:
+        selected_audio = uploaded
+    elif audio is not None:
+        selected_audio = audio
 
     if selected_audio is not None:
 
@@ -192,12 +251,7 @@ with tab1:
 
                     st.session_state["transcript_box"] = recognized_text
                     st.session_state["transcript"] = recognized_text
-
-                    # Clear previous analysis
-                    st.session_state["extraction"] = None
-                    st.session_state["result"] = None
-                    st.session_state["assessment_saved"] = False
-                    st.session_state["saved_assessment_id"] = None
+                    reset_analysis_state()
 
                     st.success(
                         "ট্রান্সক্রিপশন তৈরি হয়েছে। "
@@ -251,18 +305,17 @@ with tab1:
 
         else:
 
-            # Clear old results
-            st.session_state["extraction"] = None
-            st.session_state["result"] = None
-            st.session_state["assessment_saved"] = False
-            st.session_state["saved_assessment_id"] = None
+            reset_analysis_state()
 
             with st.spinner("লক্ষণগুলো বিশ্লেষণ করা হচ্ছে..."):
 
-                extraction = extract_symptoms(clean_transcript)
+                extraction = call_with_optional_context(
+                    extract_symptoms,
+                    clean_transcript,
+                    context=case_context,
+                )
 
             st.session_state["extraction"] = extraction
-
             st.session_state["transcript"] = clean_transcript
 
     # -----------------------------------------------------
@@ -282,7 +335,6 @@ with tab1:
             "তথ্য পাওয়া যায়নি মানে লক্ষণটি নেই—এমন নয়।"
         )
 
-        # Display extraction method
         extraction_method = ext.get(
             "extraction_method",
             "unknown",
@@ -307,7 +359,6 @@ with tab1:
                 "স্বাস্থ্যকর্মীর মাধ্যমে তথ্য যাচাই করুন।"
             )
 
-        # Display extracted information
         st.json(ext)
 
         st.info(
@@ -327,7 +378,11 @@ with tab1:
 
             with st.spinner("প্রাথমিক ঝুঁকি মূল্যায়ন করা হচ্ছে..."):
 
-                result = assess(ext)
+                result = call_with_optional_context(
+                    assess,
+                    ext,
+                    context=case_context,
+                )
 
             st.session_state["result"] = result
             st.session_state["assessment_saved"] = False
@@ -362,7 +417,14 @@ with tab1:
 
         st.markdown(f"## {icon} {label}")
 
-        # Reliability status
+        recommendation = res.get("recommendation", "")
+
+        if risk_level == "HIGH":
+            st.error(
+                recommendation
+                or "জরুরি ঝুঁকির লক্ষণ থাকতে পারে। দেরি না করে নিকটস্থ হাসপাতাল বা জরুরি মাতৃস্বাস্থ্য সেবাকেন্দ্রে যান।"
+            )
+
         if res.get("assessment_reliable"):
 
             st.caption("প্রাথমিক স্ক্রিনিং সম্পন্ন হয়েছে।")
@@ -374,7 +436,6 @@ with tab1:
                 "মূল্যায়ন করা সম্ভব হয়নি।"
             )
 
-        # Reasons
         reasons = res.get("reasons", [])
 
         if reasons:
@@ -384,17 +445,18 @@ with tab1:
             for reason in reasons:
                 st.write(f"- {reason}")
 
-        # Recommendation
-        recommendation = res.get("recommendation", "")
-
-        if recommendation:
+        if recommendation and risk_level != "HIGH":
 
             st.markdown("#### করণীয়")
 
             st.info(recommendation)
 
-        # Additional advice
-        advice = advice_for(res)
+        advice = call_with_optional_context(
+            advice_for,
+            res,
+            context=case_context,
+            extraction=ext,
+        )
 
         if advice:
 
@@ -407,23 +469,24 @@ with tab1:
         # REFERRAL SMS
         # -------------------------------------------------
 
+        sms = call_with_optional_context(
+            make_sms,
+            res,
+            context=case_context,
+            extraction=ext,
+        )
+
         if risk_level in ("HIGH", "MODERATE", "UNKNOWN"):
 
             st.divider()
 
             st.subheader("রেফারেল বার্তা (ড্রাফট)")
 
-            sms = make_sms(res)
-
             st.code(sms)
 
             st.caption(
                 "এটি একটি ডেমো বার্তা। কোনো SMS পাঠানো হয়নি।"
             )
-
-        else:
-
-            sms = make_sms(res)
 
         # -------------------------------------------------
         # SAVE RECORD
@@ -444,7 +507,7 @@ with tab1:
                     result=res,
                     advice=advice,
                     sms=sms,
-                    gestational_weeks=int(weeks) if weeks else None,
+                    gestational_weeks=normalized_weeks,
                     pregnancy_status=pregnancy_status,
                 )
 
@@ -477,10 +540,6 @@ with tab2:
 
         df = pd.DataFrame(records)
 
-        # -------------------------------------------------
-        # RISK SUMMARY
-        # -------------------------------------------------
-
         st.markdown("#### মূল্যায়নের সারসংক্ষেপ")
 
         a, b, c, d = st.columns(4)
@@ -504,10 +563,6 @@ with tab2:
 
         st.divider()
 
-        # -------------------------------------------------
-        # ASSESSMENT TABLE
-        # -------------------------------------------------
-
         st.markdown("#### সংরক্ষিত মূল্যায়ন")
 
         st.dataframe(
@@ -515,10 +570,6 @@ with tab2:
             width="stretch",
             hide_index=True,
         )
-
-        # -------------------------------------------------
-        # CSV EXPORT
-        # -------------------------------------------------
 
         st.download_button(
             label="📥 CSV ডাউনলোড করুন",
@@ -548,34 +599,34 @@ with tab3:
         """
         ### মাতৃকণ্ঠ কী করতে পারে?
 
-        - বাংলা বক্তব্য থেকে সম্ভাব্য মাতৃস্বাস্থ্য-সংক্রান্ত
+- বাংলা বক্তব্য থেকে সম্ভাব্য মাতৃস্বাস্থ্য-সংক্রান্ত
           লক্ষণ শনাক্ত করার চেষ্টা করে।
-        - শনাক্ত তথ্যের ভিত্তিতে একটি প্রাথমিক স্ক্রিনিং
+- শনাক্ত তথ্যের ভিত্তিতে একটি প্রাথমিক স্ক্রিনিং
           অগ্রাধিকার দেখায়।
-        - সম্ভাব্য পরবর্তী পদক্ষেপ সম্পর্কে বাংলা ভাষায়
+- সম্ভাব্য পরবর্তী পদক্ষেপ সম্পর্কে বাংলা ভাষায়
           সাধারণ নির্দেশনা দেয়।
-        - স্বাস্থ্যকর্মীর জন্য মূল্যায়নের রেকর্ড সংরক্ষণ করে।
+- স্বাস্থ্যকর্মীর জন্য মূল্যায়নের রেকর্ড সংরক্ষণ করে।
 
         ### মাতৃকণ্ঠ কী করতে পারে না?
 
-        - এটি রোগ নির্ণয় করতে পারে না।
-        - এটি চিকিৎসক বা প্রশিক্ষিত স্বাস্থ্যকর্মীর বিকল্প নয়।
-        - এটি ওষুধ নির্ধারণ বা চিকিৎসা শুরু করার নির্দেশ দেয় না।
-        - এটি জরুরি চিকিৎসার বিকল্প নয়।
+- এটি রোগ নির্ণয় করতে পারে না।
+- এটি চিকিৎসক বা প্রশিক্ষিত স্বাস্থ্যকর্মীর বিকল্প নয়।
+- এটি ওষুধ নির্ধারণ বা চিকিৎসা শুরু করার নির্দেশ দেয় না।
+- এটি জরুরি চিকিৎসার বিকল্প নয়।
 
         ### প্রযুক্তিগত ও ক্লিনিক্যাল সীমাবদ্ধতা
 
-        - Whisper-এর ট্রান্সক্রিপশন ভুল হতে পারে।
-        - Gemini ভুলভাবে লক্ষণ শনাক্ত করতে পারে।
-        - Keyword-based fallback সীমিত এবং সব ধরনের
+- Whisper-এর ট্রান্সক্রিপশন ভুল হতে পারে।
+- Gemini ভুলভাবে লক্ষণ শনাক্ত করতে পারে।
+- Keyword-based fallback সীমিত এবং সব ধরনের
           বাংলা বক্তব্য বুঝতে পারে না।
-        - ঝুঁকি নির্ধারণের নিয়মগুলো প্রাথমিক ডেমো নিয়ম;
+- ঝুঁকি নির্ধারণের নিয়মগুলো প্রাথমিক ডেমো নিয়ম;
           WHO বা DGHS-এর অনুমোদিত ক্লিনিক্যাল প্রোটোকল নয়।
-        - বাস্তব ব্যবহারের আগে প্রসূতি ও জনস্বাস্থ্য
+- বাস্তব ব্যবহারের আগে প্রসূতি ও জনস্বাস্থ্য
           বিশেষজ্ঞের পর্যালোচনা প্রয়োজন।
-        - স্থানীয় হাসপাতাল ও রেফারেল ব্যবস্থার সঙ্গে
+- স্থানীয় হাসপাতাল ও রেফারেল ব্যবস্থার সঙ্গে
           সংযোগ স্থাপন করা হয়নি।
-        - ডেমোতে কেবল কাল্পনিক তথ্য ব্যবহার করুন।
+- ডেমোতে কেবল কাল্পনিক তথ্য ব্যবহার করুন।
 
         ### জরুরি সতর্কতা
 
