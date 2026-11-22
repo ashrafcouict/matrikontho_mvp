@@ -1,6 +1,6 @@
+
 @import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700;800&display=swap');
 
-/* Consistent Bangla typography */
 html, body, [class*="css"], button, input, textarea {
     font-family: 'Hind Siliguri', sans-serif !important;
 }
@@ -11,25 +11,41 @@ html, body, [class*="css"], button, input, textarea {
     padding-bottom: 3rem;
 }
 
-/* Brand header: dark text on a light gradient for readable contrast */
 .hero {
-    background: linear-gradient(120deg, #fff1f2 0%, #fef3c7 100%);
+    background: linear-gradient(
+        120deg,
+        #fff1f2 0%,
+        #fef3c7 100%
+    );
+
     padding: 1.7rem 1.6rem;
     border-radius: 0 0 24px 24px;
     margin-bottom: 1rem;
 }
 
+.hero-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.hero-flower {
+    font-size: 2.8rem;
+}
+
 .hero-title {
-    color: #713b49 !important;
+    color: #633744 !important;
     font-size: clamp(2.2rem, 6vw, 3.2rem);
     font-weight: 800;
-    line-height: 1.35;
-    margin-bottom: 0.35rem;
+    line-height: 1.4;
+    opacity: 1 !important;
+    text-shadow: none !important;
+    filter: none !important;
 }
 
 .hero-tagline {
-    color: #633d46 !important;
-    font-size: clamp(1.15rem, 3vw, 1.55rem);
+    color: #593b43 !important;
+    font-size: clamp(1.1rem, 3vw, 1.55rem);
     font-weight: 700;
     line-height: 1.55;
 }
@@ -40,47 +56,12 @@ html, body, [class*="css"], button, input, textarea {
     margin-top: 0.45rem;
 }
 
-/* Buttons and form controls */
-div.stButton > button,
-div.stFormSubmitButton > button {
+div.stButton > button {
     min-height: 3rem;
     border-radius: 12px;
     font-weight: 700;
 }
 
-div[data-testid="stMetric"] {
-    background: rgba(128, 128, 128, 0.08);
-    padding: 0.8rem;
-    border-radius: 12px;
-}
-
-.symptom-name {
-    color: var(--text-color);
-    font-size: 1.08rem;
-    font-weight: 700;
-    margin-top: 0.5rem;
-}
-
-.risk-result {
-    border: 1px solid rgba(128, 128, 128, 0.35);
-    border-radius: 14px;
-    padding: 1rem 1.1rem;
-    margin: 0.6rem 0 1rem;
-}
-
-.risk-level {
-    color: var(--text-color);
-    font-size: 1.45rem;
-    font-weight: 800;
-}
-
-.risk-status {
-    color: var(--text-color);
-    opacity: 0.8;
-    margin-top: 0.2rem;
-}
-
-/* Keep content usable on narrow Android screens */
 @media (max-width: 600px) {
     .block-container {
         padding-left: 1rem;
