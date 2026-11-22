@@ -6,6 +6,7 @@ import streamlit as st
 
 from modules.advice_generator import advice_for
 from modules.asr import transcribe_audio
+from modules.conversation import next_question
 from modules.database import (
     export_csv,
     init_db,
@@ -319,7 +320,7 @@ with tab1:
             st.session_state["transcript"] = clean_transcript
 
     # -----------------------------------------------------
-    # EXTRACTION RESULTS
+    # EXTRACTION RESULTS & FOLLOW-UP QUESTION
     # -----------------------------------------------------
 
     if st.session_state["extraction"] is not None:
@@ -360,6 +361,20 @@ with tab1:
             )
 
         st.json(ext)
+
+        follow_up = call_with_optional_context(
+            next_question,
+            ext,
+            context=case_context,
+        )
+
+        if follow_up:
+            st.markdown("#### 💬 অতিরিক্ত জিজ্ঞাসা")
+            st.info(follow_up)
+            st.caption(
+                "উপরের প্রশ্ন অনুযায়ী মূল বক্তব্যে আরও তথ্য যোগ করে আবার 'লেখা বিশ্লেষণ করুন' চাপতে পারেন, "
+                "অথবা সরাসরি নিচে 'ঝুঁকি মূল্যায়ন করুন' চাপতে পারেন।"
+            )
 
         st.info(
             "এই MVP-তে শনাক্ত তথ্য সরাসরি সম্পাদনার সুবিধা নেই। "
