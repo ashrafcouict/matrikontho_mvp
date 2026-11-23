@@ -1,7 +1,12 @@
-from modules.conversation import fallback_extract
-def test_headache_detected():
-    x=fallback_extract("আমার মাথা ব্যথা করছে","pregnant",20)
-    assert any(s["name"]=="headache" and s["present"] for s in x["symptoms"])
+from modules.llm_extractor import SYMPTOM_FIELDS, _fallback_extraction
+
+
+def test_severe_headache_detected():
+    x = _fallback_extraction("আমার প্রচণ্ড মাথাব্যথা করছে")
+    assert x["severe_headache"] is True
+
+
 def test_unmentioned_not_added():
-    x=fallback_extract("আমি ভালো আছি")
-    assert x["symptoms"]==[]
+    x = _fallback_extraction("আমি ভালো আছি")
+    assert x["other_symptoms"] == []
+    assert all(x[f] is not True for f in SYMPTOM_FIELDS)

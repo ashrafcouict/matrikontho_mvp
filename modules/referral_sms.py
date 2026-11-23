@@ -26,9 +26,15 @@ def _format_case_details(context):
     village = context.get("village")
     if isinstance(village, str) and village.strip():
         parts.append(f"এলাকা: {village.strip()}")
-    sys_bp, dia_bp = context.get("bp_systolic"), context.get("bp_diastolic")
-    if isinstance(sys_bp, int) and isinstance(dia_bp, int) and sys_bp > 0 and dia_bp > 0:
-        parts.append(f"BP: {sys_bp}/{dia_bp}")
+    # Same rule as triage: one known value is shown, the blank one as "?",
+    # so a referral triggered by a single severe reading still carries it.
+    def _valid(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+    sys_bp = _valid(context.get("bp_systolic"))
+    dia_bp = _valid(context.get("bp_diastolic"))
+    if sys_bp is not None or dia_bp is not None:
+        parts.append(f"BP: {sys_bp or '?'}/{dia_bp or '?'}")
     return f" {'; '.join(parts)}।" if parts else ""
 
 

@@ -1,56 +1,63 @@
 import json
 from pathlib import Path
 
-DEFAULT_RED_FLAGS = {
-    "bleeding": "রক্তপাতের কথা জানিয়েছেন।",
-    "severe_headache": "তীব্র মাথাব্যথার কথা জানিয়েছেন।",
-    "blurred_vision": "দৃষ্টিতে ঝাপসা বা সমস্যা হওয়ার কথা জানিয়েছেন।",
-    "swelling_face_hands": "মুখ বা হাতে ফোলাভাবের কথা জানিয়েছেন।",
-    "severe_abdominal_pain": "তীব্র পেটব্যথার কথা জানিয়েছেন।",
-    "difficulty_breathing": "শ্বাসকষ্টের কথা জানিয়েছেন।",
-    "convulsions": "খিঁচুনির কথা জানিয়েছেন।",
-    "reduced_fetal_movement": "শিশুর নড়াচড়া কমে যাওয়ার কথা জানিয়েছেন।",
-    "water_breaking": "গর্ভের পানি বের হওয়ার কথা জানিয়েছেন।",
-}
+from modules.llm_extractor import SYMPTOM_FIELDS
 
-DEFAULT_MODERATE_FLAGS = {
-    "fever": "জ্বরের কথা জানিয়েছেন।",
-}
+RULES_PATH = Path(__file__).resolve().parent.parent / "data" / "clinical_rules.json"
 
 
-def _load_clinical_rules():
+class ClinicalRulesError(ValueError):
+    """Raised when the clinical rules file is missing or malformed."""
+
+
+def _parse_tier(raw, tier):
+    entries = raw.get(tier)
+    if not isinstance(entries, dict) or not entries:
+        raise ClinicalRulesError(f"'{tier}' must be a non-empty object")
+    parsed = {}
+    for key, entry in entries.items():
+        if key not in SYMPTOM_FIELDS:
+            raise ClinicalRulesError(f"{tier}.{key}: not a symptom field the extractor produces")
+        if not isinstance(entry, dict):
+            raise ClinicalRulesError(f"{tier}.{key}: must be an object with 'id' and 'reason'")
+        rule_id, reason = entry.get("id"), entry.get("reason")
+        if not isinstance(rule_id, str) or not rule_id.strip():
+            raise ClinicalRulesError(f"{tier}.{key}: missing 'id'")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ClinicalRulesError(f"{tier}.{key}: missing 'reason'")
+        parsed[key] = {"id": rule_id.strip(), "reason": reason.strip()}
+    return parsed
+
+
+def load_clinical_rules(path=RULES_PATH):
     """
-    Load flag definitions from data/clinical_rules.json if present and valid,
-    falling back safely to DEFAULT_RED_FLAGS / DEFAULT_MODERATE_FLAGS.
-    """
-    rules_path = Path(__file__).resolve().parent.parent / "data" / "clinical_rules.json"
-    if not rules_path.exists():
-        return dict(DEFAULT_RED_FLAGS), dict(DEFAULT_MODERATE_FLAGS)
+    Load and validate the flag tiers from the clinical rules file.
 
+    Fails loudly instead of falling back: a silently ignored rules file once
+    hid a schema mismatch. Every extractor symptom field must be assigned to
+    exactly one tier, otherwise a detected symptom could be ignored and the
+    case scored LOW.
+    """
     try:
-        raw = json.loads(rules_path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            return dict(DEFAULT_RED_FLAGS), dict(DEFAULT_MODERATE_FLAGS)
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ClinicalRulesError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ClinicalRulesError("rules file must contain a JSON object")
 
-        red = raw.get("red_flags")
-        moderate = raw.get("moderate_flags")
+    red = _parse_tier(raw, "red_flags")
+    moderate = _parse_tier(raw, "moderate_flags")
 
-        red_flags = (
-            {k: str(v) for k, v in red.items() if isinstance(v, str)}
-            if isinstance(red, dict) and red
-            else dict(DEFAULT_RED_FLAGS)
-        )
-        moderate_flags = (
-            {k: str(v) for k, v in moderate.items() if isinstance(v, str)}
-            if isinstance(moderate, dict) and moderate
-            else dict(DEFAULT_MODERATE_FLAGS)
-        )
-        return red_flags, moderate_flags
-    except Exception:
-        return dict(DEFAULT_RED_FLAGS), dict(DEFAULT_MODERATE_FLAGS)
+    overlap = set(red) & set(moderate)
+    if overlap:
+        raise ClinicalRulesError(f"in both tiers: {sorted(overlap)}")
+    unassigned = set(SYMPTOM_FIELDS) - set(red) - set(moderate)
+    if unassigned:
+        raise ClinicalRulesError(f"symptom fields with no tier: {sorted(unassigned)}")
+    return red, moderate
 
 
-RED_FLAGS, MODERATE_FLAGS = _load_clinical_rules()
+RED_FLAGS, MODERATE_FLAGS = load_clinical_rules()
 
 
 def _format_flag_reason(key, default_desc, pregnancy_status, gestational_weeks):
@@ -77,17 +84,25 @@ def _bp_flags(context):
 
     Thresholds follow the common severe (>=160/110) and raised (>=140/90)
     cut-offs. Demo rule only; not a validated protocol.
+
+    Each value is graded on its own, so one known severe value is enough
+    even when the other was left blank (the form stores blank as None).
     """
     if not isinstance(context, dict):
         return [], []
-    sys_bp = context.get("bp_systolic")
-    dia_bp = context.get("bp_diastolic")
-    if not isinstance(sys_bp, int) or not isinstance(dia_bp, int) or sys_bp <= 0 or dia_bp <= 0:
+
+    def _valid(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+    sys_bp = _valid(context.get("bp_systolic"))
+    dia_bp = _valid(context.get("bp_diastolic"))
+    if sys_bp is None and dia_bp is None:
         return [], []
-    reading = f"{sys_bp}/{dia_bp}"
-    if sys_bp >= 160 or dia_bp >= 110:
+
+    reading = f"{sys_bp or '?'}/{dia_bp or '?'}"
+    if (sys_bp or 0) >= 160 or (dia_bp or 0) >= 110:
         return [f"রক্তচাপ খুব বেশি ({reading} mmHg)।"], []
-    if sys_bp >= 140 or dia_bp >= 90:
+    if (sys_bp or 0) >= 140 or (dia_bp or 0) >= 90:
         return [], [f"রক্তচাপ বেশি ({reading} mmHg)।"]
     return [], []
 
@@ -128,24 +143,28 @@ def assess(extraction, context=None):
         key for key in RED_FLAGS if extraction.get(key) is True
     ]
     found_red_flags = [
-        _format_flag_reason(key, RED_FLAGS[key], pregnancy_status, gestational_weeks)
+        _format_flag_reason(key, RED_FLAGS[key]["reason"], pregnancy_status, gestational_weeks)
         for key in matched_red_keys
     ]
+    red_rule_ids = [RED_FLAGS[key]["id"] for key in matched_red_keys]
 
     matched_moderate_keys = [
         key for key in MODERATE_FLAGS if extraction.get(key) is True
     ]
     found_moderate_flags = [
-        MODERATE_FLAGS[key] for key in matched_moderate_keys
+        MODERATE_FLAGS[key]["reason"] for key in matched_moderate_keys
     ]
+    moderate_rule_ids = [MODERATE_FLAGS[key]["id"] for key in matched_moderate_keys]
 
     bp_red, bp_moderate = _bp_flags(ctx)
     if bp_red:
         found_red_flags.extend(bp_red)
         matched_red_keys.append("high_bp")
+        red_rule_ids.append("DEMO-HIGH-BP")
     if bp_moderate:
         found_moderate_flags.extend(bp_moderate)
         matched_moderate_keys.append("raised_bp")
+        moderate_rule_ids.append("DEMO-MOD-BP")
 
     other_symptoms = [
         s.strip()
@@ -159,6 +178,7 @@ def assess(extraction, context=None):
             "risk_level": "HIGH",
             "reasons": found_red_flags,
             "matched_flags": matched_red_keys,
+            "rule_ids": red_rule_ids,
             "recommendation": (
                 "দেরি না করে নিকটস্থ হাসপাতাল বা জরুরি মাতৃস্বাস্থ্য "
                 "সেবাকেন্দ্রে যান। সম্ভব হলে একজন সহায়তাকারীকে সঙ্গে নিন।"
@@ -196,6 +216,7 @@ def assess(extraction, context=None):
             "risk_level": "MODERATE",
             "reasons": reasons,
             "matched_flags": matched_moderate_keys,
+            "rule_ids": moderate_rule_ids,
             "recommendation": (
                 "আজই একজন স্বাস্থ্যকর্মী বা চিকিৎসকের সঙ্গে যোগাযোগ করুন। "
                 "অবস্থা খারাপ হলে জরুরি চিকিৎসা নিন।"

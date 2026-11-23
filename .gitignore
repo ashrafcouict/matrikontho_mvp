@@ -46,3 +46,6 @@ Thumbs.db
 .streamlit
 .agents/
 .claude/
+
+# Verification runs (evidence from .claude/skills/verify-matrikontho)
+.verify-runs/

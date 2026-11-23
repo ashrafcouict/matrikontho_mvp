@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 
 import streamlit as st
 from google import genai
@@ -20,23 +21,65 @@ SYMPTOM_FIELDS = [
     "water_breaking",
 ]
 
-NEGATION_MARKERS = [
+# Bangla negates after the symptom ("রক্তপাত নেই"); English before it ("no bleeding").
+NEGATION_MARKERS_AFTER = [
     "নেই",
     "নাই",
     "হচ্ছে না",
     "হয় না",
-    "হয় না",
     "পড়ছে না",
-    "পড়ছে না",
     "যাচ্ছে না",
-    "নড়ছে না",
-    "নড়ছে না",
-    "কম নড়ছে",
-    "কম নড়ছে",
+    "হয়নি",
+    "হয় নি",
+    "দেখি না",
+    "দেখছি না",
+]
+NEGATION_MARKERS_BEFORE = [
     "no ",
     "not ",
     "without ",
 ]
+NEGATION_MARKERS = NEGATION_MARKERS_AFTER + NEGATION_MARKERS_BEFORE
+
+NEGATION_WINDOW_AFTER = 24
+NEGATION_WINDOW_BEFORE = 12
+
+
+# English markers match whole words only: "cannot stop bleeding" is not a denial.
+_NEGATION_BEFORE_RE = re.compile(
+    r"(?<![a-z])(?:" + "|".join(re.escape(m.strip()) for m in NEGATION_MARKERS_BEFORE) + r")\s"
+)
+
+# A denial never reaches across a clause break: in "রক্তপাত হচ্ছে, ব্যথা নেই"
+# the "নেই" is about pain, not bleeding.
+_CLAUSE_BREAK_RE = re.compile(r"[,;।!?.]|\b(?:but|however)\b|কিন্তু|তবে")
+
+# Everyday phrases containing a bleeding keyword that do not report bleeding.
+# Masked out before matching; "blood" on its own still counts.
+_BENIGN_PHRASES_RE = re.compile(
+    r"\bblood\s+(?:tests?|pressure|sugar|group|reports?|count|checks?|bank)\b"
+)
+
+# Zero-width space / non-joiner / joiner / word joiner / BOM: common in Bangla
+# keyboard and ASR output, invisible, and they break substring matching.
+_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
+
+# Common misspellings folded to the spelling the keywords use.
+_SPELLING_VARIANTS = {
+    "ব্যাথা": "ব্যথা",
+}
+
+
+def _normalize(text):
+    """
+    Canonical form for keyword matching: drop zero-width characters, NFC
+    (decomposed ে+া for ো, ড+় for ড় still match), lowercase, fold common
+    misspellings, and collapse every whitespace run to one space.
+    """
+    text = unicodedata.normalize("NFC", (text or "").translate(_ZERO_WIDTH)).lower()
+    for variant, canonical in _SPELLING_VARIANTS.items():
+        text = text.replace(variant, canonical)
+    return re.sub(r"\s+", " ", text)
 
 
 def _get_api_settings():
@@ -111,17 +154,45 @@ def _sanitize_str_list(value):
     return items
 
 
-def _is_negated_around(text, keyword):
-    """Heuristic check for Bangla/English negation near a matched keyword."""
-    idx = text.find(keyword)
-    if idx == -1:
-        return False
+def _find_spans(text, keyword):
+    return [(m.start(), m.end()) for m in re.finditer(re.escape(keyword), text)]
 
-    window_start = max(0, idx - 12)
-    window_end = min(len(text), idx + len(keyword) + 24)
-    window = text[window_start:window_end]
 
-    return any(marker in window for marker in NEGATION_MARKERS)
+def _is_negated_at(text, start, end, other_spans):
+    """
+    Is the keyword match at text[start:end] denied?
+
+    Bangla markers count only after the match, English markers only before it,
+    and neither side reaches past another symptom's keyword. So in
+    "জ্বর নেই কিন্তু রক্ত যাচ্ছে" the "নেই" belongs to fever, not bleeding.
+    """
+    after_end = min(len(text), end + NEGATION_WINDOW_AFTER)
+    before_start = max(0, start - NEGATION_WINDOW_BEFORE)
+    next_break = _CLAUSE_BREAK_RE.search(text, end, after_end)
+    if next_break:
+        after_end = next_break.start()
+    for prev_break in _CLAUSE_BREAK_RE.finditer(text, before_start, start):
+        before_start = prev_break.end()
+    for other_start, other_end in other_spans:
+        if end <= other_start < after_end:
+            after_end = other_start
+        if before_start < other_end <= start:
+            before_start = other_end
+
+    # The after-window includes the match so markers that overlap it
+    # ("রক্ত পড়ছে" + " না" -> "পড়ছে না") are found. A marker lying
+    # entirely inside the match is part of the symptom, not a denial:
+    # "বাচ্চা নড়ছে না" reports an emergency.
+    after = text[start:after_end]
+    keyword_len = end - start
+    for marker in NEGATION_MARKERS_AFTER:
+        marker = _normalize(marker)
+        if any(e > keyword_len for _, e in _find_spans(after, marker)):
+            return True
+
+    # Searching the full text (not a slice) lets the lookbehind see the letter
+    # before a cut-off "not", so a window starting inside "cannot" is safe.
+    return bool(_NEGATION_BEFORE_RE.search(text, before_start, start))
 
 
 def _fallback_extraction(transcript):
@@ -130,7 +201,9 @@ def _fallback_extraction(transcript):
     A keyword match is only a signal for further assessment,
     not a clinical diagnosis.
     """
-    text = (transcript or "").lower()
+    text = _normalize(transcript)
+    # Blank out (same length, so positions stay put) phrases like "blood test".
+    text = _BENIGN_PHRASES_RE.sub(lambda m: " " * len(m.group()), text)
 
     patterns = {
         "bleeding": [
@@ -138,11 +211,23 @@ def _fallback_extraction(transcript):
             "রক্ত যাচ্ছে",
             "রক্ত পড়ছে",
             "রক্ত পড়ছে",
+            "রক্ত ঝরছে",
+            "রক্ত বের হচ্ছে",
+            "ব্লিডিং",
             "bleeding",
             "blood",
         ],
+        # Severity words are kept: a plain "মাথাব্যথা" is not a red flag.
         "severe_headache": [
             "তীব্র মাথাব্যথা",
+            "প্রচণ্ড মাথাব্যথা",
+            "প্রচন্ড মাথাব্যথা",
+            "খুব মাথাব্যথা",
+            "মাথাব্যথা খুব",
+            "মাথাব্যথা প্রচণ্ড",
+            "মাথাব্যথা প্রচন্ড",
+            "অনেক মাথাব্যথা",
+            "মাথা খুব ব্যথা",
             "অনেক মাথা ব্যথা",
             "মাথা প্রচণ্ড ব্যথা",
             "মাথা প্রচন্ড ব্যথা",
@@ -151,18 +236,26 @@ def _fallback_extraction(transcript):
             "ঝাপসা",
             "চোখে ঝাপসা",
             "চোখে কম দেখি",
+            "চোখে অন্ধকার",
+            "চোখে দেখতে পাচ্ছি না",
+            "চোখে কিছু দেখতে পাচ্ছি না",
         ],
         "swelling_face_hands": [
             "মুখ ফুলে",
             "হাত ফুলে",
             "হঠাৎ ফুলে",
             "মুখ ও হাত ফুলে",
+            "মুখ ফোলা",
+            "হাত ফোলা",
         ],
         "severe_abdominal_pain": [
             "তীব্র পেট ব্যথা",
             "প্রচণ্ড পেট ব্যথা",
             "প্রচন্ড পেট ব্যথা",
             "পেটে অনেক ব্যথা",
+            "পেটে প্রচণ্ড ব্যথা",
+            "পেটে প্রচন্ড ব্যথা",
+            "পেটে তীব্র ব্যথা",
         ],
         "fever": [
             "জ্বর",
@@ -172,10 +265,16 @@ def _fallback_extraction(transcript):
             "শ্বাসকষ্ট",
             "শ্বাস নিতে কষ্ট",
             "দম নিতে কষ্ট",
+            "শ্বাস নিতে পারছি না",
+            "দম নিতে পারছি না",
         ],
         "convulsions": [
             "খিঁচুনি",
             "খিচুনি",
+            "fit হয়েছে",
+            "fit হচ্ছে",
+            "ফিট হয়েছে",
+            "ফিট হচ্ছে",
         ],
         "reduced_fetal_movement": [
             "বাচ্চা নড়ছে না",
@@ -184,10 +283,15 @@ def _fallback_extraction(transcript):
             "বাচ্চা কম নড়ছে",
             "বাচ্চার নড়াচড়া কম",
             "বাচ্চার নড়াচড়া কম",
+            "নড়াচড়া করছে না",
+            "নড়াচড়া বন্ধ",
+            "বাচ্চা নড়ে না",
         ],
         "water_breaking": [
             "পানি ভেঙে",
             "পানি ভেঙ্গে",
+            "পানি ভাঙছে",
+            "পানি পড়ছে",
             "পানি বের হচ্ছে",
             "গর্ভের পানি",
         ],
@@ -196,25 +300,29 @@ def _fallback_extraction(transcript):
     result = _empty_extraction(transcript, method="keyword_fallback")
     found = []
 
-    for symptom, keywords in patterns.items():
-        positive_match = False
-        negated_match = False
+    spans = {
+        symptom: [
+            span
+            for keyword in dict.fromkeys(_normalize(k) for k in keywords)
+            for span in _find_spans(text, keyword)
+        ]
+        for symptom, keywords in patterns.items()
+    }
 
-        for keyword in keywords:
-            if keyword in text:
-                if _is_negated_around(text, keyword):
-                    negated_match = True
-                else:
-                    positive_match = True
-                    break
+    for symptom, own_spans in spans.items():
+        if not own_spans:
+            result[symptom] = None
+            continue
 
-        if positive_match:
+        other_spans = [
+            span for other, lst in spans.items() if other != symptom for span in lst
+        ]
+        # Reported if ANY mention is not denied: "গতকাল নেই… আজ হচ্ছে".
+        if any(not _is_negated_at(text, s, e, other_spans) for s, e in own_spans):
             result[symptom] = True
             found.append(symptom)
-        elif negated_match:
-            result[symptom] = False
         else:
-            result[symptom] = None
+            result[symptom] = False
 
     result["symptoms"] = found
     result["other_symptoms"] = []
@@ -347,6 +455,18 @@ User statement:
             result[field] = value
             if value is True:
                 detected_flags.append(field)
+
+        # Safety net: a parseable but wrong reply ("true" as a string, a
+        # renamed key, {}, or a plain miss) must not downgrade an emergency
+        # the keywords clearly see. Keywords can only add flags, never remove.
+        keyword_hits = _fallback_extraction(transcript)
+        keyword_overrides = []
+        for field in SYMPTOM_FIELDS:
+            if keyword_hits[field] is True and result[field] is not True:
+                result[field] = True
+                detected_flags.append(field)
+                keyword_overrides.append(field)
+        result["keyword_overrides"] = keyword_overrides
 
         raw_symptoms = _sanitize_str_list(data.get("symptoms"))
         merged_symptoms = list(detected_flags)
