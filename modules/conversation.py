@@ -18,6 +18,17 @@ def next_question(extraction, asked_keys=None, context=None):
 
     This is a conversational aid, not a substitute for clinical assessment.
     """
+    follow_up = next_follow_up(extraction, asked_keys=asked_keys, context=context)
+    return follow_up[1] if follow_up else None
+
+
+def next_follow_up(extraction, asked_keys=None, context=None):
+    """
+    Return (key, question) for the next follow-up, or None.
+
+    key is a symptom field name when the answer can update that field,
+    otherwise "other_symptoms" or "clarification".
+    """
     if not isinstance(extraction, dict):
         return None
 
@@ -31,11 +42,11 @@ def next_question(extraction, asked_keys=None, context=None):
             continue
 
         # Skip fetal movement follow-up if user is explicitly marked not pregnant.
-        if symptom == "reduced_fetal_movement" and pregnancy_status == "not_pregnant":
+        if symptom == "reduced_fetal_movement" and pregnancy_status in ("not_pregnant", "postpartum"):
             continue
 
         if extraction.get(symptom) is True:
-            return question
+            return symptom, question
 
     if "other_symptoms" not in seen:
         other_symptoms = [
@@ -45,19 +56,22 @@ def next_question(extraction, asked_keys=None, context=None):
         ]
         if other_symptoms:
             return (
+                "other_symptoms",
                 f"আপনি '{other_symptoms[0]}' এর কথা বলেছেন—এটি কতক্ষণ ধরে হচ্ছে "
-                "এবং এর সঙ্গে অন্য কোনো সমস্যা আছে কি?"
+                "এবং এর সঙ্গে অন্য কোনো সমস্যা আছে কি?",
             )
 
     if extraction.get("needs_clarification") and "clarification" not in seen:
         if extraction.get("duration"):
             return (
+                "clarification",
                 "আপনি কি আপনার সমস্যাটি আরেকটু বিস্তারিতভাবে বলতে পারবেন? "
-                "কতটা তীব্র বা আর কী কষ্ট হচ্ছে সেটিও বলুন।"
+                "কতটা তীব্র বা আর কী কষ্ট হচ্ছে সেটিও বলুন।",
             )
         return (
+            "clarification",
             "আপনি কি আপনার সমস্যাটি আরেকটু বিস্তারিতভাবে বলতে পারবেন? "
-            "কখন থেকে সমস্যা হচ্ছে সেটিও বলুন।"
+            "কখন থেকে সমস্যা হচ্ছে সেটিও বলুন।",
         )
 
     return None

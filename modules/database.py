@@ -24,7 +24,15 @@ TABLE_COLUMNS = [
     ("recommendation", "TEXT"),
     ("advice", "TEXT"),
     ("referral_sms", "TEXT"),
+    ("speaker", "TEXT"),
+    ("village", "TEXT"),
+    ("bp_systolic", "INTEGER"),
+    ("bp_diastolic", "INTEGER"),
+    ("referral_facility", "TEXT"),
+    ("sms_sent", "INTEGER"),
 ]
+
+LIST_COLUMNS = [name for name, _ in TABLE_COLUMNS if name != "extraction_json"]
 
 EXPORT_HEADERS = [name for name, _ in TABLE_COLUMNS]
 
@@ -36,6 +44,12 @@ def _get_connection():
     connection = sqlite3.connect(target_path)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def _clean_positive_int(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if value > 0 else None
 
 
 def init_db():
@@ -82,6 +96,12 @@ def save_assessment(
     gestational_weeks=None,
     pregnancy_status=None,
     patient_name=None,
+    speaker=None,
+    village=None,
+    bp_systolic=None,
+    bp_diastolic=None,
+    referral_facility=None,
+    sms_sent=False,
 ):
     """Save one assessment and return its database ID."""
     init_db()
@@ -123,9 +143,15 @@ def save_assessment(
                     reasons,
                     recommendation,
                     advice,
-                    referral_sms
+                    referral_sms,
+                    speaker,
+                    village,
+                    bp_systolic,
+                    bp_diastolic,
+                    referral_facility,
+                    sms_sent
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now().isoformat(timespec="seconds"),
@@ -140,6 +166,12 @@ def save_assessment(
                     str(result.get("recommendation", "")),
                     advice_text,
                     str(sms or ""),
+                    speaker,
+                    (village or "").strip() or None,
+                    _clean_positive_int(bp_systolic),
+                    _clean_positive_int(bp_diastolic),
+                    referral_facility,
+                    1 if sms_sent else 0,
                 ),
             )
 
@@ -153,20 +185,8 @@ def list_assessments(limit=200):
 
     with closing(_get_connection()) as connection:
         rows = connection.execute(
-            """
-            SELECT
-                id,
-                created_at,
-                patient_name,
-                pregnancy_status,
-                gestational_weeks,
-                transcript,
-                extraction_method,
-                risk_level,
-                reasons,
-                recommendation,
-                advice,
-                referral_sms
+            f"""
+            SELECT {", ".join(LIST_COLUMNS)}
             FROM assessments
             ORDER BY id DESC
             LIMIT ?
@@ -198,21 +218,8 @@ def export_csv():
 
     with closing(_get_connection()) as connection:
         rows = connection.execute(
-            """
-            SELECT
-                id,
-                created_at,
-                patient_name,
-                pregnancy_status,
-                gestational_weeks,
-                transcript,
-                extraction_method,
-                extraction_json,
-                risk_level,
-                reasons,
-                recommendation,
-                advice,
-                referral_sms
+            f"""
+            SELECT {", ".join(EXPORT_HEADERS)}
             FROM assessments
             ORDER BY id DESC
             """

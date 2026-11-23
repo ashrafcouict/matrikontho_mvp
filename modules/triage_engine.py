@@ -57,6 +57,8 @@ def _format_flag_reason(key, default_desc, pregnancy_status, gestational_weeks):
     if key == "bleeding":
         if pregnancy_status == "pregnant":
             return "গর্ভাবস্থায় রক্তপাতের কথা জানিয়েছেন।"
+        if pregnancy_status == "postpartum":
+            return "প্রসবের পর রক্তপাতের কথা জানিয়েছেন।"
         if pregnancy_status == "not_pregnant":
             return "অস্বাভাবিক রক্তপাতের কথা জানিয়েছেন।"
         return "রক্তপাতের কথা জানিয়েছেন (গর্ভাবস্থার তথ্য নিশ্চিত নয়)।"
@@ -68,6 +70,26 @@ def _format_flag_reason(key, default_desc, pregnancy_status, gestational_weeks):
         return f"{gestational_weeks} সপ্তাহে শিশুর নড়াচড়া কমে যাওয়ার কথা জানিয়েছেন।"
 
     return default_desc
+
+
+def _bp_flags(context):
+    """Return (red_reasons, moderate_reasons) from an optional BP reading in context.
+
+    Thresholds follow the common severe (>=160/110) and raised (>=140/90)
+    cut-offs. Demo rule only; not a validated protocol.
+    """
+    if not isinstance(context, dict):
+        return [], []
+    sys_bp = context.get("bp_systolic")
+    dia_bp = context.get("bp_diastolic")
+    if not isinstance(sys_bp, int) or not isinstance(dia_bp, int) or sys_bp <= 0 or dia_bp <= 0:
+        return [], []
+    reading = f"{sys_bp}/{dia_bp}"
+    if sys_bp >= 160 or dia_bp >= 110:
+        return [f"রক্তচাপ খুব বেশি ({reading} mmHg)।"], []
+    if sys_bp >= 140 or dia_bp >= 90:
+        return [], [f"রক্তচাপ বেশি ({reading} mmHg)।"]
+    return [], []
 
 
 def assess(extraction, context=None):
@@ -117,6 +139,14 @@ def assess(extraction, context=None):
         MODERATE_FLAGS[key] for key in matched_moderate_keys
     ]
 
+    bp_red, bp_moderate = _bp_flags(ctx)
+    if bp_red:
+        found_red_flags.extend(bp_red)
+        matched_red_keys.append("high_bp")
+    if bp_moderate:
+        found_moderate_flags.extend(bp_moderate)
+        matched_moderate_keys.append("raised_bp")
+
     other_symptoms = [
         s.strip()
         for s in (extraction.get("other_symptoms") or [])
@@ -142,7 +172,8 @@ def assess(extraction, context=None):
         return {
             "risk_level": "UNKNOWN",
             "reasons": [
-                "স্বয়ংক্রিয় লক্ষণ শনাক্তকরণ নির্ভরযোগ্যভাবে সম্পন্ন হয়নি।"
+                "স্বয়ংক্রিয় লক্ষণ শনাক্তকরণ নির্ভরযোগ্যভাবে সম্পন্ন হয়নি।",
+                *found_moderate_flags,
             ],
             "matched_flags": matched_moderate_keys,
             "recommendation": (

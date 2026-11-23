@@ -8,6 +8,8 @@ def _format_pregnancy_summary(context):
     parts = []
     if status == "pregnant":
         parts.append("গর্ভবতী")
+    elif status == "postpartum":
+        parts.append("প্রসব-পরবর্তী")
     elif status == "not_pregnant":
         parts.append("গর্ভবতী নন")
 
@@ -15,6 +17,19 @@ def _format_pregnancy_summary(context):
         parts.append(f"{weeks} সপ্তাহ")
 
     return f" ({', '.join(parts)})" if parts else ""
+
+
+def _format_case_details(context):
+    if not isinstance(context, dict):
+        return ""
+    parts = []
+    village = context.get("village")
+    if isinstance(village, str) and village.strip():
+        parts.append(f"এলাকা: {village.strip()}")
+    sys_bp, dia_bp = context.get("bp_systolic"), context.get("bp_diastolic")
+    if isinstance(sys_bp, int) and isinstance(dia_bp, int) and sys_bp > 0 and dia_bp > 0:
+        parts.append(f"BP: {sys_bp}/{dia_bp}")
+    return f" {'; '.join(parts)}।" if parts else ""
 
 
 def _format_reasons_summary(result, extraction):
@@ -41,6 +56,7 @@ def make_sms(
     phone_number="",
     context=None,
     extraction=None,
+    facility=None,
 ):
     """
     Generate a referral SMS draft. No SMS is actually sent.
@@ -82,8 +98,15 @@ def make_sms(
         else ""
     )
 
+    case_details = _format_case_details(context)
+    facility_note = (
+        f" রেফার: {facility.strip()}।"
+        if isinstance(facility, str) and facility.strip()
+        else ""
+    )
+
     return (
-        f"মাতৃকণ্ঠ রেফারেল ({urgency}): {clean_name}{preg_tag}। "
-        f"{instruction}{details}{contact_note} "
+        f"মাতৃকণ্ঠ রেফারেল ({urgency}): {clean_name}{preg_tag}।{case_details} "
+        f"{instruction}{details}{facility_note}{contact_note} "
         f"এটি একটি প্রাথমিক স্ক্রিনিং বার্তা, চিকিৎসকের রোগনির্ণয় নয়।"
     )

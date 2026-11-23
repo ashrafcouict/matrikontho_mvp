@@ -43,3 +43,6 @@ models/
 *.swp
 .DS_Store
 Thumbs.db
+.streamlit
+.agents/
+.claude/
