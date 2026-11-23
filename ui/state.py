@@ -2,6 +2,8 @@
 
 import streamlit as st
 
+from modules.asr import transcribe_audio
+from modules.llm_extractor import extract_symptoms
 from ui.constants import SYMPTOM_LABELS
 
 
@@ -73,6 +75,64 @@ def answer_follow_up(key: str, value) -> None:
         _sync_symptom_list(ext)
         st.session_state["ext_version"] += 1  # re-render chips with new defaults
         clear_result()
+
+
+def transcribe_answer(audio_key: str, answer_key: str) -> None:
+    """Mic answer to a follow-up: transcribe it into the answer text box."""
+    audio = st.session_state.get(audio_key)
+    if audio is None:
+        return
+    with st.spinner("উত্তর শোনা হচ্ছে..."):
+        transcription = transcribe_audio(audio)
+    text = (transcription.get("text") or "").strip()
+    if not transcription.get("success") or not text:
+        st.session_state["fu_audio_error"] = transcription.get(
+            "error", "উত্তরটি বোঝা যায়নি। আবার বলুন অথবা লিখুন।"
+        )
+        return
+    existing = (st.session_state.get(answer_key) or "").strip()
+    st.session_state[answer_key] = f"{existing} {text}".strip()
+
+
+def submit_text_answer(key: str, question: str, answer_key: str, context: dict) -> None:
+    """Free-text follow-up answer: add it to the transcript and re-extract.
+
+    Symptom values the user already set (chips / হ্যাঁ-না) are kept; the new
+    extraction only fills in what was still unknown.
+    """
+    answer = (st.session_state.get(answer_key) or "").strip()
+    if not answer:
+        st.toast("উত্তর লিখুন, অথবা 'এড়িয়ে যান' চাপুন।")
+        return
+
+    old = st.session_state["extraction"] or {}
+    combined = f"{st.session_state.get('transcript', '').strip()} {answer}".strip()
+
+    with st.spinner("উত্তর বিশ্লেষণ করা হচ্ছে..."):
+        new = extract_symptoms(combined, context=context)
+
+    if old.get("user_confirmed"):
+        for field in SYMPTOM_LABELS:
+            if old.get(field) is not None:
+                new[field] = old[field]
+        new["user_confirmed"] = True
+    for field in ("duration", "severity"):
+        if not new.get(field) and old.get(field):
+            new[field] = old[field]
+
+    answers = dict(old.get("follow_up_answers") or {})
+    answers[key] = answer
+    new["follow_up_answers"] = answers
+    new.setdefault("follow_up_log", list(old.get("follow_up_log") or []))
+    new["follow_up_log"].append({"question": question, "answer": answer})
+    _sync_symptom_list(new)
+
+    st.session_state["asked_keys"].append(key)
+    st.session_state["transcript"] = combined
+    st.session_state["transcript_box"] = combined
+    st.session_state["extraction"] = new
+    st.session_state["ext_version"] += 1
+    clear_result()
 
 
 def mark_sms_unsent() -> None:

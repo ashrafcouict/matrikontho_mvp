@@ -10,6 +10,7 @@ st.set_page_config(page_title="মাতৃকণ্ঠ | Matrikontho", page_ico
 from modules.database import init_db  # noqa: E402
 from ui.confirm import render_confirm  # noqa: E402
 from ui.dashboard import render_dashboard  # noqa: E402
+from ui.debug import render_debug_sidebar  # noqa: E402
 from ui.header import load_stylesheet, render_header  # noqa: E402
 from ui.limitations import render_limitations  # noqa: E402
 from ui.record import render_case_info, render_speech_input  # noqa: E402
@@ -39,3 +40,5 @@ with dashboard_tab:
 
 with limits_tab:
     render_limitations()
+
+render_debug_sidebar()  # after the flow so it shows this run's data

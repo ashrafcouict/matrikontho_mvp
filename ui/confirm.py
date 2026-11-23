@@ -5,7 +5,13 @@ import streamlit as st
 from modules.conversation import next_follow_up
 from modules.triage_engine import assess
 from ui.constants import SYMPTOM_LABELS
-from ui.state import answer_follow_up, clear_result, on_chips_change
+from ui.state import (
+    answer_follow_up,
+    clear_result,
+    on_chips_change,
+    submit_text_answer,
+    transcribe_answer,
+)
 
 
 def render_confirm(context: dict) -> None:
@@ -21,9 +27,6 @@ def render_confirm(context: dict) -> None:
     _render_chips(ext)
     _render_extra_details(ext)
     _render_follow_up(ext, context)
-
-    with st.expander("🔧 কাঁচা ডেটা (JSON)"):
-        st.json(ext)
 
     if st.button("ঝুঁকি মূল্যায়ন করুন", type="primary", width="stretch"):
         clear_result()
@@ -92,6 +95,17 @@ def _render_follow_up(ext: dict, context: dict) -> None:
                       on_click=answer_follow_up, args=(key, None))
         st.caption("'না' বললে লক্ষণটি তালিকা থেকে বাদ যাবে। নিশ্চিত না হলে 'জানি না' চাপুন।")
     else:
-        st.caption("উত্তরটি উপরের লেখায় যোগ করে আবার 'লেখা বিশ্লেষণ করুন' চাপতে পারেন।")
-        st.button("ঠিক আছে", key=f"fu_ok_{key}", width="stretch",
-                  on_click=answer_follow_up, args=(key, None))
+        answer_key = f"fu_text_{key}"
+        audio_key = f"fu_audio_{key}"
+        st.audio_input("🎙️ মুখে উত্তর দিন", key=audio_key,
+                       on_change=transcribe_answer, args=(audio_key, answer_key))
+        if st.session_state.get("fu_audio_error"):
+            st.warning(st.session_state.pop("fu_audio_error"))
+        st.text_input("আপনার উত্তর", key=answer_key,
+                      placeholder="যেমন: দুই দিন ধরে, সাথে শ্বাসকষ্টও আছে")
+        send, skip = st.columns([2, 1])
+        send.button("উত্তর পাঠান", key=f"fu_send_{key}", type="secondary", width="stretch",
+                    on_click=submit_text_answer, args=(key, question, answer_key, context))
+        skip.button("এড়িয়ে যান", key=f"fu_skip_{key}", width="stretch",
+                    on_click=answer_follow_up, args=(key, None))
+        st.caption("উত্তরটি মূল বক্তব্যের সাথে যোগ করে আবার বিশ্লেষণ করা হবে।")

@@ -169,3 +169,9 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
     padding: 0.2rem 0 0.2rem 0.7rem;
     margin-bottom: 0.8rem;
 }
+
+/* Keep Streamlit's Material icon font (the Bangla font rule above would break it). */
+[data-testid="stIconMaterial"],
+span[class*="material-symbols"] {
+    font-family: "Material Symbols Rounded" !important;
+}
