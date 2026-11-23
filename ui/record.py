@@ -24,15 +24,20 @@ def render_case_info() -> dict:
             min_value=0, max_value=45, value=0, step=1, key="gestational_weeks",
         )
 
-    col3, col4, col5 = st.columns([1, 1, 2])
-    bp_sys = col3.number_input(
-        "রক্তচাপ (উপরের)", min_value=0, max_value=260, value=0, step=1,
-        key="bp_systolic", help="জানা না থাকলে ০ রাখুন",
-    )
-    bp_dia = col4.number_input(
-        "রক্তচাপ (নিচের)", min_value=0, max_value=180, value=0, step=1,
-        key="bp_diastolic", help="জানা না থাকলে ০ রাখুন",
-    )
+    # Only a health worker can measure BP; a mother speaking for herself skips it.
+    bp_sys = bp_dia = 0
+    if SPEAKERS[speaker] == "health_worker":
+        col3, col4, col5 = st.columns([1, 1, 2])
+        bp_sys = col3.number_input(
+            "রক্তচাপ (উপরের)", min_value=0, max_value=260, value=0, step=1,
+            key="bp_systolic", help="জানা না থাকলে ০ রাখুন",
+        )
+        bp_dia = col4.number_input(
+            "রক্তচাপ (নিচের)", min_value=0, max_value=180, value=0, step=1,
+            key="bp_diastolic", help="জানা না থাকলে ০ রাখুন",
+        )
+    else:
+        col5 = st.container()
     village = col5.text_input("গ্রাম / ইউনিয়ন", key="village", placeholder="যেমন: চর রাজিবপুর")
 
     context = {
