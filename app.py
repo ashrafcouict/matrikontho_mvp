@@ -206,32 +206,16 @@ with tab1:
     # AUDIO INPUT
     # -----------------------------------------------------
 
+   # -----------------------------------------------------
+    # AUDIO INPUT
+    # -----------------------------------------------------
+
     st.markdown("#### 🎙️ অডিও ইনপুট")
 
-    audio = st.audio_input(
+    selected_audio = st.audio_input(
         "মাইক্রোফোনে কথা বলুন",
         key="recorded_audio",
     )
-
-    uploaded = st.file_uploader(
-        "অথবা অডিও ফাইল আপলোড করুন",
-        type=["wav", "mp3", "m4a", "ogg"],
-        key="uploaded_audio",
-    )
-
-    selected_audio = None
-    if audio is not None and uploaded is not None:
-        audio_source = st.radio(
-            "কোন অডিও উৎস থেকে লেখা তৈরি করবেন?",
-            ["আপলোড করা ফাইল", "মাইক্রোফোন রেকর্ডিং"],
-            horizontal=True,
-            key="audio_source_choice",
-        )
-        selected_audio = uploaded if audio_source == "আপলোড করা ফাইল" else audio
-    elif uploaded is not None:
-        selected_audio = uploaded
-    elif audio is not None:
-        selected_audio = audio
 
     if selected_audio is not None:
 
