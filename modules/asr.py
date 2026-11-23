@@ -23,22 +23,22 @@ MIME_BY_EXT = {
 
 def _get_gemini_settings():
     api_key = ""
-    model_name = "gemini-2.5-flash"
+    model_name = "gemini-3.8-flash"
 
     try:
         if "GEMINI_API_KEY" in st.secrets:
             api_key = str(st.secrets["GEMINI_API_KEY"] or "").strip()
         if "GEMINI_MODEL" in st.secrets:
-            model_name = str(st.secrets["GEMINI_MODEL"] or "gemini-2.5-flash").strip()
+            model_name = str(st.secrets["GEMINI_MODEL"] or "gemini-3.8-flash").strip()
     except Exception:
         pass
 
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if os.getenv("GEMINI_MODEL"):
-        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+        model_name = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 
-    return api_key, model_name or "gemini-2.5-flash"
+    return api_key, model_name or "gemini-3.8-flash"
 
 
 def _default_compute_type(device: str) -> str:
