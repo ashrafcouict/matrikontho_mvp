@@ -25,4 +25,4 @@ pytest -q
 ```
 
 ## Safety
-This is a demonstration, not a medical device or validated clinical decision support system. Rule thresholds and advice are provisional and must be reviewed by qualified maternal-health professionals against current WHO/DGHS protocols before any real-world use. Use synthetic data only.
+This is a demonstration , not a medical device or validated clinical decision support system. Rule thresholds and advice are provisional and must be reviewed by qualified maternal-health professionals against current WHO/DGHS protocols before any real-world use. Use synthetic data only.
