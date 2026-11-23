@@ -1,5 +1,5 @@
 
-streamlit>=1.40
+streamlit>=1.50
 pandas>=2.2
 faster-whisper==1.2.1
 av==18.1.0
