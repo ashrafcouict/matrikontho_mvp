@@ -99,7 +99,7 @@ When API keys are configured, the audio or text a user provides is sent to Eleve
 
 ## Limitations
 - Screening aid, not a diagnosis; rules are provisional and need clinical review.
-- Dialect support is limited and unvalidated; ASR can make errors on Sylheti and Chittagonian speech. When the app cannot understand the input it returns UNKNOWN, never LOW.
+- Dialect support is limited. When the app cannot understand the input it returns UNKNOWN, never LOW.
 - Referral SMS is simulated; no real message is sent.
 - Accuracy depends on audio quality; free-tier API limits may apply.
 - No real patient data; test with synthetic inputs only.
