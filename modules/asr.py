@@ -56,9 +56,7 @@ def _read_gemini_settings():
 
 
 # ElevenLabs Scribe: fallback when Gemini is rate-limited / unavailable.
-# TEMPORARY hardcoded key (expires 2026-11-24). ELEVENLABS_API_KEY env var wins if set.
-# Do NOT commit this file with the key in it.
-_ELEVENLABS_API_KEY = "sk_dad73e19916a9d17d9d0204457bf254c1d2338153c305ff0"
+# Key comes from ELEVENLABS_API_KEY in .streamlit/secrets.toml, else the env var.
 ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 # scribe_v3: best on the Chittagonian test clip by user review (may leak a few
 # Latin-script words; the extraction prompt tolerates that). Override with
@@ -67,7 +65,14 @@ ELEVENLABS_STT_MODEL = os.getenv("ELEVENLABS_STT_MODEL", "").strip() or "scribe_
 
 
 def _get_elevenlabs_key() -> str:
-    return (os.getenv("ELEVENLABS_API_KEY", "").strip() or _ELEVENLABS_API_KEY).strip()
+    try:
+        if "ELEVENLABS_API_KEY" in st.secrets:
+            key = str(st.secrets["ELEVENLABS_API_KEY"] or "").strip()
+            if key:
+                return key
+    except Exception:
+        pass
+    return os.getenv("ELEVENLABS_API_KEY", "").strip()
 
 
 def _transcribe_with_elevenlabs(payload: bytes, suffix: str) -> tuple[str, str | None]:
