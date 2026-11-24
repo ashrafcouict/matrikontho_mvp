@@ -1,106 +1,108 @@
-# মাতৃকণ্ঠ (Matrikontho)
-Bangla voice-first maternal risk-screening hackathon MVP.
+# Matrikontho (মাতৃকণ্ঠ) — MVP
 
-## Quick start (uv)
+Bangla voice-first maternal danger-sign screening and referral-support prototype, built for the **CoU AI Hackathon 2026**.
+
+| Field | Details |
+| :--- | :--- |
+| **Team Name** | NeuroForge |
+| **Team Members** | Ashraful Alam, Prachi Saha, Saidul Islam |
+| **Live Demo** | [https://matrikonthomvp-pt8qusej9eu6uxxubuhsqk.streamlit.app/](https://matrikonthomvp-pt8qusej9eu6uxxubuhsqk.streamlit.app/) |
+| **Demo Video** | Not provided; please use the live demo |
+| **Login** | None. The app has no login, so no test credentials are needed. |
+
+> **Safety Notice:** Matrikontho is a hackathon demonstration and a screening aid. It is not a diagnostic tool, a medical device, or a validated clinical decision-support system. Use synthetic data only.
+
+---
+
+## Problem and Solution
+
+In rural Bangladesh, many pregnant women depend on community health workers and family members for first-level care. Danger signs such as vaginal bleeding, convulsions, severe headache with blurred vision, swelling of the face and hands, high fever, and reduced fetal movement are often recognised late. Assessment is subjective and paper-based, and referral is delayed. Existing digital tools usually need typing and formal Bangla or English.
+
+**Matrikontho** lets a health worker, or a mother when a health worker cannot visit, describe symptoms by voice or text in Bangla. The app:
+1. Transcribes the speech,
+2. Extracts structured symptoms,
+3. Assigns a risk level with the reasons, using deterministic, guideline-based rules,
+4. Shows simple Bangla advice, and
+5. Drafts a referral SMS and logs the case.
+
+---
+
+## Features and How the AI Works
+
+**Pipeline:** `voice or text` → `speech-to-text` → `symptom extraction` → `rule-based triage` → `Bangla advice` → `referral SMS draft` → `case log`
+
+* **Voice and text input with a confirmation step (`ui/record.py`, `ui/confirm.py`, `modules/conversation.py`):** The user records or uploads audio, or types. The transcript and detected symptoms are shown for confirmation before a result is produced. Mother self-screening is supported.
+* **Speech-to-text (`modules/asr.py`):** Engines are tried in order: ElevenLabs Scribe (`scribe_v3`, Bangla) if `ELEVENLABS_API_KEY` is configured, then the Gemini API (`gemini-3.5-flash-lite`) if `GEMINI_API_KEY` is configured, then local `faster-whisper` as a last resort. The first engine that returns text is used.
+* **AI symptom extraction (`modules/llm_extractor.py`):** Gemini fills a fixed symptom schema (bleeding, severe headache, blurred vision, reduced fetal movement, fever, swelling, convulsions, and others), plus gestational age and blood pressure when mentioned. If the API is unavailable or uncertain, a deterministic keyword fallback is used. *The keyword fallback is not AI.*
+* **Dialect keyword safety net (`modules/dialect_terms.py`):** Contains curated regional Bangla symptom expressions and phonetic/lexical mappings (covering common Sylheti and Chittagonian danger-sign phrases) compiled by the team and verified against synthetic test cases (`tests/`). It acts as a deterministic safety net so critical symptoms are not missed when standard ASR/LLM extraction underperforms on regional dialects.
+* **Deterministic rule-based triage (`modules/triage_engine.py`, `data/clinical_rules.json`):** A Python rule engine, not a trained model, so every result is explainable and auditable. The AI only handles understanding; the risk decision comes from the rules.
+  * Any matched danger-sign rule gives **HIGH**.
+  * Moderate-tier symptoms or unmapped symptoms give **MODERATE**.
+  * If the transcript is empty, extraction is unreliable (fallback used), or more information is needed, the result is **UNKNOWN**. The system never reports **LOW** risk when it did not understand the input.
+  * Each result lists the reasons and rule IDs that triggered it.
+* **Bangla advice (`modules/advice_generator.py`, `data/bangla_advice.json`):** Risk-level-specific guidance in simple Bangla.
+* **Referral SMS (`modules/referral_sms.py`, `ui/referral.py`):** For high-risk cases, an SMS text is generated for the nearest health facility. In this prototype, the SMS is simulated; no real SMS is sent.
+* **Case log and dashboard (`modules/database.py`, `ui/dashboard.py`):** Cases are saved in SQLite, with a summary dashboard and CSV export.
+* **Safety, privacy and limits (`ui/limitations.py`, `modules/secret_check.py`, `CLINICAL_SAFETY.md`, `PRIVACY.md`):** Limits are shown in the app, and a startup check helps prevent secrets from being exposed.
+
+---
+
+## Tech Stack, Models, APIs, Datasets
+
+| Layer | Technology |
+| :--- | :--- |
+| **Language / Runtime** | Python 3.12 (project supports 3.11–3.12) |
+| **UI** | Streamlit (mobile-friendly), custom CSS in `assets/styles.css` |
+| **Speech-to-text** | ElevenLabs Scribe (`scribe_v3`) → Gemini (`gemini-3.5-flash-lite`) → local `faster-whisper` |
+| **Symptom extraction** | Gemini (`gemini-3.5-flash-lite`) + deterministic keyword fallback |
+| **Triage** | Python rule engine + `data/clinical_rules.json` |
+| **Storage** | SQLite |
+| **Packaging** | `uv`, `pyproject.toml`, `uv.lock` (`requirements.txt` for plain `pip`) |
+| **Tests** | `pytest` |
+| **Hosting** | Streamlit Community Cloud |
+
+**Datasets:** No external dataset is used. Demo inputs are synthetic (`data/demo_cases.json`).
+
+---
+
+## AI Tools Used
+
+### Models and APIs at Runtime
+* **ElevenLabs Scribe (`scribe_v3`):** Bangla speech-to-text. Uploaded audio is sent to ElevenLabs.
+* **Gemini API:** speech-to-text fallback and symptom extraction. Audio and text are sent to Google.
+* **Faster-Whisper:** local last-resort speech recognition.
+
+### AI Coding Assistants Used During Development
+* **Claude & Google Gemini:** Used during development for scaffolding Streamlit UI screens, refining rule-engine logic, drafting pytest test cases, reviewing code, and structuring documentation.
+
+*All code in this repository is understood and can be explained by the team.*
+
+---
+
+## Third-Party Code and Assets
+
+* **Open-source libraries:** Streamlit, `google-genai` / Gemini SDK, `faster-whisper`, `pytest`, `uv`, and the other packages listed in `pyproject.toml` / `requirements.txt`.
+* **Clinical rule source:** Rules are based on commonly cited maternal danger signs (e.g. WHO guidance) and were not adapted line-by-line from a specific protocol. Thresholds are provisional demo rules, not a validated clinical protocol.
+* **Assets:** No third-party images or external fonts are used.
+
+---
+
+## Setup Steps
+
+### Quick Start (`uv`)
 ```bash
-# 1. install uv (once) — see "Install uv" below for Windows
-# 2. from the project folder:
-uv sync                      # install Python 3.12 + all dependencies into .venv
-uv run streamlit run app.py  # start the app → http://localhost:8501
-```
-Add your Gemini key in `.streamlit/secrets.toml` for fast voice transcription (see step 3 below).
+### Tests
+`uv run pytest -q` (see `TESTING.md`).
 
-## What works
-- Streamlit mobile-friendly UI, microphone/audio upload and text fallback.
-- Optional Faster-Whisper Bangla ASR.
-- Optional Gemini structured symptom extraction; deterministic keyword fallback if absent.
-- Deterministic Python triage rules, Bangla advice, simulated referral SMS.
-- SQLite case log and CSV dashboard.
-- Automated unit tests and synthetic cases.
+## Privacy
+When API keys are configured, the audio or text a user provides is sent to ElevenLabs and/or Google (Gemini). Use synthetic data only. See `PRIVACY.md`.
 
-## Run locally
-
-### 1. Install uv
-[uv](https://docs.astral.sh/uv/) manages Python, the virtual environment and the dependencies.
-
-**Linux / macOS**
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# then open a new terminal (or run: source $HOME/.local/bin/env)
-uv --version
-```
-
-**Windows (PowerShell)**
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-# then open a new PowerShell window
-uv --version
-```
-Alternatives: `winget install --id=astral-sh.uv -e` (Windows) or `pipx install uv` / `pip install uv` (any OS).
-
-### 2. Install dependencies and run
-```bash
-uv sync                      # creates .venv with Python 3.12 and installs everything from uv.lock
+## Limitations
+- Screening aid, not a diagnosis; rules are provisional and need clinical review.
+- Dialect support is limited and unvalidated; ASR can make errors on Sylheti and Chittagonian speech. When the app cannot understand the input it returns UNKNOWN, never LOW.
+- Referral SMS is simulated; no real message is sent.
+- Accuracy depends on audio quality; free-tier API limits may apply.
+- No real patient data; test with synthetic inputs only.
+# Install uv once: [https://docs.astral.sh/uv/](https://docs.astral.sh/uv/)
+uv sync                      # installs Python 3.12 and all dependencies into .venv
 uv run streamlit run app.py  # opens http://localhost:8501
-```
-You don't need to activate the venv; `uv run` uses it automatically. uv downloads Python 3.12 if it isn't installed (the project supports 3.11–3.12).
-
-Without uv, plain pip still works:
-```bash
-python -m venv .venv
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-# Linux/macOS:        source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-### Everyday uv commands
-| What | Command |
-|---|---|
-| Run the app | `uv run streamlit run app.py` |
-| Run on another port | `uv run streamlit run app.py --server.port 8502` |
-| Open to other devices on your Wi-Fi (e.g. a phone) | `uv run streamlit run app.py --server.address 0.0.0.0` |
-| Run the tests | `uv run pytest -q` |
-| Re-install after pulling new code | `uv sync` |
-| Add a package | `uv add <package>` (then update `requirements.txt` too) |
-| Stop the app | `Ctrl+C` in the terminal |
-
-### 3. Gemini API key (`.streamlit/secrets.toml`)
-Gemini handles Bangla speech-to-text and symptom extraction. **Without a key the app still runs**, but it falls back to local Faster-Whisper on the CPU (slow, often minutes per clip) and keyword-based extraction (less accurate).
-
-1. Get a free key at <https://aistudio.google.com/apikey>.
-2. Create the file `.streamlit/secrets.toml` in the project root:
-
-   **Linux / macOS**
-   ```bash
-   mkdir -p .streamlit
-   nano .streamlit/secrets.toml
-   ```
-   **Windows (PowerShell)**
-   ```powershell
-   New-Item -ItemType Directory -Force .streamlit
-   notepad .streamlit\secrets.toml
-   ```
-3. Put this inside it:
-   ```toml
-   GEMINI_API_KEY = "your-key-here"
-   GEMINI_MODEL = "gemini-2.5-flash"
-   ```
-4. Restart the app (Ctrl+C, then `uv run streamlit run app.py`). Streamlit reads secrets only at startup.
-
-The app reads `st.secrets` first, then environment variables, so you can set the key in the environment instead:
-```bash
-export GEMINI_API_KEY="your-key-here"        # Linux/macOS
-$env:GEMINI_API_KEY = "your-key-here"        # Windows PowerShell
-```
-`.env` files are **not** loaded automatically.
-
-> 🔒 `.streamlit/secrets.toml` is in `.gitignore`. Never commit your key. On Streamlit Community Cloud, paste the same two lines into *App settings → Secrets* instead.
-
-## Tests
-```bash
-uv run pytest -q
-```
-
-## Safety
-This is a demonstration , not a medical device or validated clinical decision support system. Rule thresholds and advice are provisional and must be reviewed by qualified maternal-health professionals against current WHO/DGHS protocols before any real-world use. Use synthetic data only.
