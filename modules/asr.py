@@ -9,6 +9,8 @@ from google import genai
 from google.genai import types
 import streamlit as st
 
+from modules.dialect_terms import stt_keyterms
+
 _MODEL = None
 _MODEL_LOCK = threading.Lock()
 
@@ -22,7 +24,18 @@ MIME_BY_EXT = {
 }
 
 
+# HARDCODED model: wins over GEMINI_MODEL in secrets/env (secrets can't be edited
+# right now). gemini-3.5-flash-lite has a 500 requests/day free tier vs 20 for
+# the Flash models. Set to "" to go back to reading GEMINI_MODEL.
+GEMINI_MODEL_HARDCODED = "gemini-3.5-flash-lite"
+
+
 def _get_gemini_settings():
+    api_key, model_name = _read_gemini_settings()
+    return api_key, GEMINI_MODEL_HARDCODED or model_name
+
+
+def _read_gemini_settings():
     api_key = ""
     model_name = "gemini-3.8-flash"
 
@@ -47,7 +60,10 @@ def _get_gemini_settings():
 # Do NOT commit this file with the key in it.
 _ELEVENLABS_API_KEY = "sk_dad73e19916a9d17d9d0204457bf254c1d2338153c305ff0"
 ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
-ELEVENLABS_STT_MODEL = "scribe_v1"
+# scribe_v3: best on the Chittagonian test clip by user review (may leak a few
+# Latin-script words; the extraction prompt tolerates that). Override with
+# ELEVENLABS_STT_MODEL (e.g. scribe_v2).
+ELEVENLABS_STT_MODEL = os.getenv("ELEVENLABS_STT_MODEL", "").strip() or "scribe_v3"
 
 
 def _get_elevenlabs_key() -> str:
@@ -60,11 +76,15 @@ def _transcribe_with_elevenlabs(payload: bytes, suffix: str) -> tuple[str, str |
         return "", "ELEVENLABS_API_KEY পাওয়া যায়নি।"
 
     mime_type = MIME_BY_EXT.get(suffix.lower()) or "audio/wav"
+    form = [("model_id", ELEVENLABS_STT_MODEL), ("language_code", "ben")]
+    # Opt-in: keyterms cost extra and are unproven on dialect audio (see TESTING.md).
+    if os.getenv("ELEVENLABS_KEYTERMS", "0").strip() == "1":
+        form += [("keyterms", term) for term in stt_keyterms()]
     try:
         response = requests.post(
             ELEVENLABS_STT_URL,
             headers={"xi-api-key": api_key},
-            data={"model_id": ELEVENLABS_STT_MODEL, "language_code": "ben"},
+            data=form,
             files={"file": (f"audio{suffix}", payload, mime_type)},
             timeout=60,
         )
@@ -219,9 +239,33 @@ def _ok(text, engine, model, payload, suffix, earlier_errors):
     }
 
 
+DEFAULT_ENGINE_ORDER = ("elevenlabs", "gemini", "whisper")
+_ENGINES = set(DEFAULT_ENGINE_ORDER)
+
+
+def _engine_order() -> list[str]:
+    """Engines to try, in order.
+
+    ASR_BACKEND=elevenlabs|gemini|whisper pins one engine (whisper keeps the old
+    Gemini last-resort). ASR_BACKEND=auto (default) uses ASR_ORDER, a comma list
+    such as "gemini,elevenlabs,whisper"; default is ElevenLabs, Gemini, Whisper.
+    """
+    backend = os.getenv("ASR_BACKEND", "auto").strip().lower()
+    if backend in _ENGINES:
+        return [backend, "gemini"] if backend == "whisper" else [backend]
+
+    order = [
+        e for e in (p.strip().lower() for p in os.getenv("ASR_ORDER", "").split(","))
+        if e in _ENGINES
+    ]
+    order = list(dict.fromkeys(order))
+    return order + [e for e in DEFAULT_ENGINE_ORDER if e not in order] if order else list(DEFAULT_ENGINE_ORDER)
+
+
 def transcribe_audio(audio_file):
     """
-    Transcribe audio: Gemini first, then ElevenLabs Scribe, then local faster-whisper.
+    Transcribe audio, trying engines in _engine_order() (default: ElevenLabs
+    Scribe, then Gemini, then local faster-whisper).
     """
     if audio_file is None or not callable(getattr(audio_file, "read", None)):
         return {
@@ -247,39 +291,23 @@ def transcribe_audio(audio_file):
             "error": "অডিও ফাইলটি খালি। অনুগ্রহ করে আবার রেকর্ড করুন বা আপলোড করুন।",
         }
 
-    backend = os.getenv("ASR_BACKEND", "auto").strip().lower()
     api_key, gemini_model = _get_gemini_settings()
     errors = []
 
-    # 1. Try Gemini first in auto/gemini mode when GEMINI_API_KEY is available
-    if backend in ("auto", "gemini") and api_key:
-        text, err = _transcribe_with_gemini(payload, suffix)
+    for engine in _engine_order():
+        if engine == "gemini" and api_key:
+            text, err = _transcribe_with_gemini(payload, suffix)
+            model = gemini_model
+        elif engine == "elevenlabs" and _get_elevenlabs_key():
+            text, err = _transcribe_with_elevenlabs(payload, suffix)
+            model = ELEVENLABS_STT_MODEL
+        elif engine == "whisper":
+            text, err = _transcribe_with_whisper(payload, suffix)
+            model = os.getenv("WHISPER_MODEL", "small").strip() or "small"
+        else:
+            continue
         if text:
-            return _ok(text, "gemini", gemini_model, payload, suffix, errors)
-        if err:
-            errors.append(err)
-
-    # 2. ElevenLabs Scribe as the Gemini fallback (auto/elevenlabs mode)
-    if backend in ("auto", "elevenlabs") and _get_elevenlabs_key():
-        text, err = _transcribe_with_elevenlabs(payload, suffix)
-        if text:
-            return _ok(text, "elevenlabs", ELEVENLABS_STT_MODEL, payload, suffix, errors)
-        if err:
-            errors.append(err)
-
-    # 3. Try local faster-whisper in auto/whisper mode
-    if backend in ("auto", "whisper"):
-        text, err = _transcribe_with_whisper(payload, suffix)
-        if text:
-            return _ok(text, "whisper", os.getenv("WHISPER_MODEL", "small").strip() or "small", payload, suffix, errors)
-        if err:
-            errors.append(err)
-
-    # 4. Last-resort Gemini attempt if not already run
-    if backend == "whisper" and api_key:
-        text, err = _transcribe_with_gemini(payload, suffix)
-        if text:
-            return _ok(text, "gemini", gemini_model, payload, suffix, errors)
+            return _ok(text, engine, model, payload, suffix, errors)
         if err:
             errors.append(err)
 

@@ -8,6 +8,8 @@ import streamlit as st
 from google import genai
 from google.genai.errors import APIError
 
+from modules.asr import GEMINI_MODEL_HARDCODED
+
 SYMPTOM_FIELDS = [
     "bleeding",
     "severe_headache",
@@ -96,7 +98,7 @@ def _get_api_settings():
             "gemini-3.8-flash",
         )
 
-    return (api_key or os.getenv("GEMINI_API_KEY", "")).strip(), model_name
+    return (api_key or os.getenv("GEMINI_API_KEY", "")).strip(), GEMINI_MODEL_HARDCODED or model_name
 
 
 def _empty_extraction(transcript, method="fallback"):
@@ -378,10 +380,16 @@ symptom extraction component।
 লক্ষণটি স্পষ্টভাবে অস্বীকার করলে false লিখবে।
 অস্পষ্ট হলে null লিখবে।
 
+বক্তব্যটি আঞ্চলিক ভাষায় (যেমন চট্টগ্রাম বা সিলেটের ভাষা) হতে পারে এবং
+স্বয়ংক্রিয় ট্রান্সক্রিপশনের ভুল বা ল্যাটিন অক্ষর থাকতে পারে। অর্থ বুঝে লক্ষণ শনাক্ত করো,
+তবে যা বলা হয়নি তা যোগ করবে না। "না"/"নাই" জাতীয় অস্বীকৃতি অবশ্যই বজায় রাখবে।
+"standard_bangla"-তে বক্তব্যটি হুবহু অর্থে প্রমিত বাংলায় লিখবে; যে শব্দ বোঝা যায় না সেখানে [?] লিখবে।
+
 শুধু valid JSON দেবে। কোনো Markdown বা অতিরিক্ত ব্যাখ্যা দেবে না।
 
 JSON schema:
 {{
+  "standard_bangla": "",
   "symptoms": [],
   "bleeding": null,
   "severe_headache": null,
@@ -459,10 +467,17 @@ User statement:
         # Safety net: a parseable but wrong reply ("true" as a string, a
         # renamed key, {}, or a plain miss) must not downgrade an emergency
         # the keywords clearly see. Keywords can only add flags, never remove.
+        # Also scan Gemini's standard-Bangla rewrite, so dialect speech still
+        # reaches the (standard-spelling) keyword net.
+        standard = data.get("standard_bangla")
+        standard = standard.strip() if isinstance(standard, str) else ""
+        result["standard_bangla"] = standard
         keyword_hits = _fallback_extraction(transcript)
+        standard_hits = _fallback_extraction(standard) if standard else {}
         keyword_overrides = []
         for field in SYMPTOM_FIELDS:
-            if keyword_hits[field] is True and result[field] is not True:
+            hit = keyword_hits[field] is True or standard_hits.get(field) is True
+            if hit and result[field] is not True:
                 result[field] = True
                 detected_flags.append(field)
                 keyword_overrides.append(field)

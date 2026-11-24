@@ -189,6 +189,30 @@ def test_gemini_garbage_falls_back_to_keywords_and_still_detects(fake_gemini):
     assert assess(extraction, context=PREGNANT)["risk_level"] == "HIGH"
 
 
+# --- dialect: keyword net also scans Gemini's standard-Bangla rewrite -------
+
+DIALECT_TRANSCRIPT = "আঞ্চলিক ভাষার বক্তব্য যা কোনো keyword মেলে না"
+
+
+def test_standard_bangla_rewrite_reaches_keyword_net(fake_gemini):
+    body = json.loads(_gemini_reply())
+    body["standard_bangla"] = "সকাল থেকে রক্ত পড়ছে"
+    fake_gemini["reply"] = json.dumps(body, ensure_ascii=False)
+    extraction = extract_symptoms(DIALECT_TRANSCRIPT, context=PREGNANT)
+    assert extraction["standard_bangla"] == "সকাল থেকে রক্ত পড়ছে"
+    assert extraction["bleeding"] is True
+    assert "bleeding" in extraction["keyword_overrides"]
+    assert assess(extraction, context=PREGNANT)["risk_level"] == "HIGH"
+
+
+def test_standard_bangla_denial_adds_no_flag(fake_gemini):
+    body = json.loads(_gemini_reply())
+    body["standard_bangla"] = "রক্ত পড়ছে না"
+    fake_gemini["reply"] = json.dumps(body, ensure_ascii=False)
+    extraction = extract_symptoms(DIALECT_TRANSCRIPT, context=PREGNANT)
+    assert extraction["bleeding"] is not True
+
+
 # --- blood pressure emergency (from context, not speech) --------------------
 
 @pytest.mark.parametrize("sys_bp,dia_bp", [(160, 100), (150, 110), (180, 120)])
