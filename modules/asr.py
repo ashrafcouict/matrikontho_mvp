@@ -69,6 +69,13 @@ def _load_whisper_model():
     return _MODEL
 
 
+GEMINI_ASR_PROMPT = (
+    "এই অডিওতে বলা বাংলা কথা হুবহু বাংলা লিপিতে লিখে দাও। "
+    "কোনো অনুবাদ বা অতিরিক্ত মন্তব্য লিখবে না। "
+    "অডিওতে কোনো স্পষ্ট কথা না থাকলে শুধু খালি উত্তর দাও।"
+)
+
+
 def _transcribe_with_gemini(payload: bytes, suffix: str) -> tuple[str, str | None]:
     api_key, model_name = _get_gemini_settings()
     if not api_key:
@@ -86,11 +93,7 @@ def _transcribe_with_gemini(payload: bytes, suffix: str) -> tuple[str, str | Non
             model=model_name,
             contents=[
                 types.Part.from_bytes(data=payload, mime_type=mime_type),
-                (
-                    "এই অডিওতে বলা বাংলা কথা হুবহু বাংলা লিপিতে লিখে দাও। "
-                    "কোনো অনুবাদ বা অতিরিক্ত মন্তব্য লিখবে না। "
-                    "অডিওতে কোনো স্পষ্ট কথা না থাকলে শুধু খালি উত্তর দাও।"
-                ),
+                GEMINI_ASR_PROMPT,
             ],
         )
         text = (getattr(response, "text", None) or "").strip()
@@ -160,6 +163,25 @@ def _transcribe_with_whisper(payload: bytes, suffix: str) -> tuple[str, str | No
                 pass
 
 
+def _ok(text, engine, model, payload, suffix, earlier_errors):
+    """Success result + debug info so the dev panel can show which ASR engine ran."""
+    return {
+        "success": True,
+        "text": text,
+        "error": None,
+        "debug": {
+            "engine": engine,
+            "model": model,
+            "audio_bytes": len(payload),
+            "audio_suffix": suffix,
+            "asr_backend_setting": os.getenv("ASR_BACKEND", "auto").strip().lower(),
+            "prompt_sent": GEMINI_ASR_PROMPT if engine == "gemini" else None,
+            "earlier_engine_errors": list(earlier_errors),
+            "raw_text": text,
+        },
+    }
+
+
 def transcribe_audio(audio_file):
     """
     Transcribe audio using Gemini (preferred when API key is configured)
@@ -190,14 +212,14 @@ def transcribe_audio(audio_file):
         }
 
     backend = os.getenv("ASR_BACKEND", "auto").strip().lower()
-    api_key, _ = _get_gemini_settings()
+    api_key, gemini_model = _get_gemini_settings()
     errors = []
 
     # 1. Try Gemini first in auto/gemini mode when GEMINI_API_KEY is available
     if backend in ("auto", "gemini") and api_key:
         text, err = _transcribe_with_gemini(payload, suffix)
         if text:
-            return {"success": True, "text": text, "error": None}
+            return _ok(text, "gemini", gemini_model, payload, suffix, errors)
         if err:
             errors.append(err)
 
@@ -205,7 +227,7 @@ def transcribe_audio(audio_file):
     if backend in ("auto", "whisper"):
         text, err = _transcribe_with_whisper(payload, suffix)
         if text:
-            return {"success": True, "text": text, "error": None}
+            return _ok(text, "whisper", os.getenv("WHISPER_MODEL", "small").strip() or "small", payload, suffix, errors)
         if err:
             errors.append(err)
 
@@ -213,7 +235,7 @@ def transcribe_audio(audio_file):
     if backend == "whisper" and api_key:
         text, err = _transcribe_with_gemini(payload, suffix)
         if text:
-            return {"success": True, "text": text, "error": None}
+            return _ok(text, "gemini", gemini_model, payload, suffix, errors)
         if err:
             errors.append(err)
 

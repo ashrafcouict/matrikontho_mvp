@@ -97,6 +97,10 @@ def _render_audio_input() -> None:
     with st.spinner("বাংলা কথা শনাক্ত করা হচ্ছে..."):
         transcription = transcribe_audio(audio)
 
+    st.session_state["asr_debug"] = transcription.get("debug") or {
+        "engine": None,
+        "error": transcription.get("error"),
+    }
     if not transcription.get("success"):
         st.error(transcription.get("error", "অডিও প্রসেস করা যায়নি।"))
         return

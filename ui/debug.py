@@ -6,6 +6,13 @@ import streamlit as st
 def render_debug_sidebar() -> None:
     with st.sidebar:
         st.markdown("### 🔧 ডেভেলপার তথ্য")
+        asr = st.session_state.get("asr_debug")
+        if asr:
+            engine = asr.get("engine")
+            label = {"gemini": "Gemini", "whisper": "Whisper"}.get(engine, "কোনোটিই নয় (ব্যর্থ)")
+            st.caption(f"অডিও → লেখা: **{label}**")
+            with st.expander("অডিও ট্রান্সক্রিপশন (ASR)"):
+                st.json(asr)
         ext = st.session_state.get("extraction")
         result = st.session_state.get("result")
         if ext is None and result is None:
