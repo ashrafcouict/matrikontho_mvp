@@ -30,7 +30,7 @@ def render_header() -> None:
                 আপনার কথা শুনি, ঝুঁকি বুঝি, সাহায্যের পথ দেখাই
             </div>
             <div class="hero-subtitle">
-                Bangla Voice-based Maternal Risk Screener · Hackathon MVP
+                Bangla Voice-based Maternal Risk Screener
             </div>
         </div>
         """,
