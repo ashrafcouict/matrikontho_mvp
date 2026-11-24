@@ -7,7 +7,6 @@ Bangla voice-first maternal danger-sign screening and referral-support prototype
 | **Team Name** | NeuroForge |
 | **Team Members** | Ashraful Alam, Prachi Saha, Saidul Islam |
 | **Live Demo** | [https://matrikonthomvp-pt8qusej9eu6uxxubuhsqk.streamlit.app/](https://matrikonthomvp-pt8qusej9eu6uxxubuhsqk.streamlit.app/) |
-| **Demo Video** | Not provided; please use the live demo |
 | **Login** | None. The app has no login, so no test credentials are needed. |
 
 > **Safety Notice:** Matrikontho is a hackathon demonstration and a screening aid. It is not a diagnostic tool, a medical device, or a validated clinical decision-support system. Use synthetic data only.
