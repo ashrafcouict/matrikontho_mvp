@@ -4,6 +4,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+import requests
 from google import genai
 from google.genai import types
 import streamlit as st
@@ -39,6 +40,42 @@ def _get_gemini_settings():
         model_name = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 
     return api_key, model_name or "gemini-3.8-flash"
+
+
+# ElevenLabs Scribe: fallback when Gemini is rate-limited / unavailable.
+# TEMPORARY hardcoded key (expires 2026-11-24). ELEVENLABS_API_KEY env var wins if set.
+# Do NOT commit this file with the key in it.
+_ELEVENLABS_API_KEY = "sk_dad73e19916a9d17d9d0204457bf254c1d2338153c305ff0"
+ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+ELEVENLABS_STT_MODEL = "scribe_v1"
+
+
+def _get_elevenlabs_key() -> str:
+    return (os.getenv("ELEVENLABS_API_KEY", "").strip() or _ELEVENLABS_API_KEY).strip()
+
+
+def _transcribe_with_elevenlabs(payload: bytes, suffix: str) -> tuple[str, str | None]:
+    api_key = _get_elevenlabs_key()
+    if not api_key:
+        return "", "ELEVENLABS_API_KEY পাওয়া যায়নি।"
+
+    mime_type = MIME_BY_EXT.get(suffix.lower()) or "audio/wav"
+    try:
+        response = requests.post(
+            ELEVENLABS_STT_URL,
+            headers={"xi-api-key": api_key},
+            data={"model_id": ELEVENLABS_STT_MODEL, "language_code": "ben"},
+            files={"file": (f"audio{suffix}", payload, mime_type)},
+            timeout=60,
+        )
+        if response.status_code != 200:
+            return "", f"ElevenLabs অডিও ট্রান্সক্রিপশন ব্যর্থ হয়েছে: HTTP {response.status_code} {response.text[:300]}"
+        text = (response.json().get("text") or "").strip()
+        if not text:
+            return "", "ElevenLabs থেকে কোনো কথা শনাক্ত হয়নি।"
+        return text, None
+    except Exception as exc:
+        return "", f"ElevenLabs অডিও ট্রান্সক্রিপশন ব্যর্থ হয়েছে: {exc}"
 
 
 def _default_compute_type(device: str) -> str:
@@ -184,8 +221,7 @@ def _ok(text, engine, model, payload, suffix, earlier_errors):
 
 def transcribe_audio(audio_file):
     """
-    Transcribe audio using Gemini (preferred when API key is configured)
-    with fallback to faster-whisper if available.
+    Transcribe audio: Gemini first, then ElevenLabs Scribe, then local faster-whisper.
     """
     if audio_file is None or not callable(getattr(audio_file, "read", None)):
         return {
@@ -223,7 +259,15 @@ def transcribe_audio(audio_file):
         if err:
             errors.append(err)
 
-    # 2. Try local faster-whisper in auto/whisper mode
+    # 2. ElevenLabs Scribe as the Gemini fallback (auto/elevenlabs mode)
+    if backend in ("auto", "elevenlabs") and _get_elevenlabs_key():
+        text, err = _transcribe_with_elevenlabs(payload, suffix)
+        if text:
+            return _ok(text, "elevenlabs", ELEVENLABS_STT_MODEL, payload, suffix, errors)
+        if err:
+            errors.append(err)
+
+    # 3. Try local faster-whisper in auto/whisper mode
     if backend in ("auto", "whisper"):
         text, err = _transcribe_with_whisper(payload, suffix)
         if text:
@@ -231,7 +275,7 @@ def transcribe_audio(audio_file):
         if err:
             errors.append(err)
 
-    # 3. Last-resort Gemini attempt if not already run
+    # 4. Last-resort Gemini attempt if not already run
     if backend == "whisper" and api_key:
         text, err = _transcribe_with_gemini(payload, suffix)
         if text:
